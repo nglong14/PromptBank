@@ -28,11 +28,11 @@ type CreatePromptInput struct {
 }
 
 type CreateVersionInput struct {
-	PromptID      uuid.UUID
-	Assets        json.RawMessage
-	FrameworkID   string
-	TechniqueIDs  []string
-	ComposedOut   string
+	PromptID     uuid.UUID
+	Assets       json.RawMessage
+	FrameworkID  string
+	TechniqueIDs []string
+	ComposedOut  string
 }
 
 type DerivePromptInput struct {

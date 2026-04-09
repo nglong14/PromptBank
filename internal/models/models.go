@@ -37,8 +37,8 @@ type PromptVersion struct {
 }
 
 type PromptLineage struct {
-	PromptID              uuid.UUID  `json:"promptId"`
-	DerivedFromPromptID   uuid.UUID  `json:"derivedFromPromptId"`
-	DerivedFromVersionID  *uuid.UUID `json:"derivedFromVersionId,omitempty"`
-	CreatedAt             time.Time  `json:"createdAt"`
+	PromptID             uuid.UUID  `json:"promptId"`
+	DerivedFromPromptID  uuid.UUID  `json:"derivedFromPromptId"`
+	DerivedFromVersionID *uuid.UUID `json:"derivedFromVersionId,omitempty"`
+	CreatedAt            time.Time  `json:"createdAt"`
 }
