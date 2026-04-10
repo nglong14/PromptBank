@@ -2,14 +2,20 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { clearToken, getToken } from "@/lib/auth";
 
 export default function NavBar() {
   const router = useRouter();
-  const isAuthenticated = Boolean(getToken());
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  useEffect(() => {
+    setIsAuthenticated(Boolean(getToken()));
+  }, []);
 
   function onLogout() {
     clearToken();
+    setIsAuthenticated(false);
     router.push("/login");
   }
 

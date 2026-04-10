@@ -3,9 +3,31 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import ProtectedPage from "@/components/ProtectedPage";
-import { createPromptVersion, getPrompt, listPromptVersions, updatePrompt } from "@/lib/api";
+import AssetEditor from "@/components/AssetEditor";
+import FrameworkSelector from "@/components/FrameworkSelector";
+import TechniqueToggles from "@/components/TechniqueToggles";
+import DiagnosticPanel from "@/components/DiagnosticPanel";
+import {
+  compose,
+  createPromptVersion,
+  getPrompt,
+  listFrameworks,
+  listPromptVersions,
+  listTechniques,
+  normalizeAssets,
+  updatePrompt,
+} from "@/lib/api";
 import { getToken } from "@/lib/auth";
-import type { Prompt, PromptVersion } from "@/lib/types";
+import type {
+  Assets,
+  ComposeResponse,
+  FieldQuality,
+  Framework,
+  Prompt,
+  PromptVersion,
+  SlotDiagnostic,
+  Technique,
+} from "@/lib/types";
 
 function parseCsv(input: string): string[] {
   return input
@@ -13,6 +35,15 @@ function parseCsv(input: string): string[] {
     .map((item) => item.trim())
     .filter(Boolean);
 }
+
+const emptyAssets: Assets = {
+  persona: "",
+  context: "",
+  tone: "",
+  constraints: "",
+  examples: [],
+  goal: "",
+};
 
 export default function PromptDetailPage() {
   const params = useParams<{ id: string }>();
@@ -29,32 +60,40 @@ export default function PromptDetailPage() {
   const [tagsInput, setTagsInput] = useState("");
   const [updateLoading, setUpdateLoading] = useState(false);
 
-  const [assetsInput, setAssetsInput] = useState("{}");
+  const [assets, setAssets] = useState<Assets>(emptyAssets);
+  const [fieldReport, setFieldReport] = useState<Record<string, FieldQuality> | null>(null);
   const [frameworkId, setFrameworkId] = useState("");
-  const [techniqueIdsInput, setTechniqueIdsInput] = useState("");
-  const [composedOutput, setComposedOutput] = useState("");
-  const [createVersionLoading, setCreateVersionLoading] = useState(false);
+  const [techniqueIds, setTechniqueIds] = useState<string[]>([]);
+  const [diagnostics, setDiagnostics] = useState<SlotDiagnostic[]>([]);
+  const [composeResult, setComposeResult] = useState<ComposeResponse | null>(null);
+  const [composeLoading, setComposeLoading] = useState(false);
+  const [saveVersionLoading, setSaveVersionLoading] = useState(false);
+
+  const [frameworks, setFrameworks] = useState<Framework[]>([]);
+  const [techniques, setTechniques] = useState<Technique[]>([]);
 
   const loadAll = useCallback(async () => {
     const token = getToken();
-    if (!token) {
-      return;
-    }
+    if (!token) return;
 
     setLoading(true);
     setError("");
     try {
-      const [promptResponse, versionsResponse] = await Promise.all([
+      const [promptRes, versionsRes, fwRes, techRes] = await Promise.all([
         getPrompt(token, promptId),
         listPromptVersions(token, promptId),
+        listFrameworks(token),
+        listTechniques(token),
       ]);
 
-      setPrompt(promptResponse);
-      setVersions(versionsResponse.items);
-      setTitle(promptResponse.title);
-      setStatus(promptResponse.status);
-      setCategory(promptResponse.category);
-      setTagsInput(promptResponse.tags.join(", "));
+      setPrompt(promptRes);
+      setVersions(versionsRes.items);
+      setTitle(promptRes.title);
+      setStatus(promptRes.status);
+      setCategory(promptRes.category);
+      setTagsInput(promptRes.tags.join(", "));
+      setFrameworks(fwRes.items);
+      setTechniques(techRes.items);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load prompt details";
       setError(message);
@@ -67,12 +106,74 @@ export default function PromptDetailPage() {
     void loadAll();
   }, [loadAll]);
 
+  async function onNormalize() {
+    const token = getToken();
+    if (!token) return;
+    try {
+      const res = await normalizeAssets(token, assets);
+      setAssets(res.assets);
+      setFieldReport(res.fieldReport);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Normalize failed");
+    }
+  }
+
+  async function onCompose(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const token = getToken();
+    if (!token) return;
+    if (!frameworkId) {
+      setError("Select a framework before composing.");
+      return;
+    }
+
+    setComposeLoading(true);
+    setError("");
+    setComposeResult(null);
+    setDiagnostics([]);
+    try {
+      const res = await compose(token, { assets, frameworkId, techniqueIds });
+      setComposeResult(res);
+      setDiagnostics(res.diagnostics ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Composition failed");
+    } finally {
+      setComposeLoading(false);
+    }
+  }
+
+  async function onSaveVersion() {
+    if (!composeResult) return;
+    const token = getToken();
+    if (!token) return;
+
+    setSaveVersionLoading(true);
+    setError("");
+    try {
+      await createPromptVersion(token, promptId, {
+        assets,
+        frameworkId: composeResult.frameworkId,
+        techniqueIds: composeResult.techniqueIds,
+        composedOutput: composeResult.composedOutput,
+      });
+      setComposeResult(null);
+      setDiagnostics([]);
+      setAssets(emptyAssets);
+      setFieldReport(null);
+      setFrameworkId("");
+      setTechniqueIds([]);
+      await loadAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save version");
+    } finally {
+      setSaveVersionLoading(false);
+    }
+  }
+
   async function onUpdatePrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const token = getToken();
-    if (!token) {
-      return;
-    }
+    if (!token) return;
     setUpdateLoading(true);
     setError("");
     try {
@@ -84,45 +185,9 @@ export default function PromptDetailPage() {
       });
       setPrompt(updated);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to update prompt";
-      setError(message);
+      setError(err instanceof Error ? err.message : "Failed to update prompt");
     } finally {
       setUpdateLoading(false);
-    }
-  }
-
-  async function onCreateVersion(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const token = getToken();
-    if (!token) {
-      return;
-    }
-
-    setCreateVersionLoading(true);
-    setError("");
-    try {
-      let assets: unknown = {};
-      if (assetsInput.trim() !== "") {
-        assets = JSON.parse(assetsInput);
-      }
-
-      await createPromptVersion(token, promptId, {
-        assets,
-        frameworkId,
-        techniqueIds: parseCsv(techniqueIdsInput),
-        composedOutput,
-      });
-
-      setAssetsInput("{}");
-      setFrameworkId("");
-      setTechniqueIdsInput("");
-      setComposedOutput("");
-      await loadAll();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to create prompt version";
-      setError(message);
-    } finally {
-      setCreateVersionLoading(false);
     }
   }
 
@@ -140,8 +205,7 @@ export default function PromptDetailPage() {
         ) : (
           <>
             <article className="card">
-              <h2>Prompt Data</h2>
-              <p className="muted">Endpoints: GET/PATCH /api/v1/prompts/{`{promptID}`}</p>
+              <h2>Prompt Metadata</h2>
               {prompt ? (
                 <p className="muted">
                   Created {new Date(prompt.createdAt).toLocaleString()} | Updated{" "}
@@ -151,37 +215,20 @@ export default function PromptDetailPage() {
               <form onSubmit={onUpdatePrompt}>
                 <label className="field">
                   Title
-                  <input
-                    className="input"
-                    required
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                  />
+                  <input className="input" required value={title} onChange={(e) => setTitle(e.target.value)} />
                 </label>
-
                 <label className="field">
                   Status
-                  <input className="input" value={status} onChange={(event) => setStatus(event.target.value)} />
+                  <input className="input" value={status} onChange={(e) => setStatus(e.target.value)} />
                 </label>
-
                 <label className="field">
                   Category
-                  <input
-                    className="input"
-                    value={category}
-                    onChange={(event) => setCategory(event.target.value)}
-                  />
+                  <input className="input" value={category} onChange={(e) => setCategory(e.target.value)} />
                 </label>
-
                 <label className="field">
                   Tags (comma separated)
-                  <input
-                    className="input"
-                    value={tagsInput}
-                    onChange={(event) => setTagsInput(event.target.value)}
-                  />
+                  <input className="input" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} />
                 </label>
-
                 <button className="btn btn-primary" type="submit" disabled={updateLoading}>
                   {updateLoading ? "Saving..." : "Update prompt"}
                 </button>
@@ -189,56 +236,63 @@ export default function PromptDetailPage() {
             </article>
 
             <article className="card">
-              <h2>Create Prompt Version</h2>
-              <p className="muted">Endpoint: POST /api/v1/prompts/{`{promptID}`}/versions</p>
-              <form onSubmit={onCreateVersion}>
-                <label className="field">
-                  Assets (JSON)
-                  <textarea
-                    className="textarea mono"
-                    rows={4}
-                    value={assetsInput}
-                    onChange={(event) => setAssetsInput(event.target.value)}
-                  />
-                </label>
+              <h2>Compose New Version</h2>
+              <p className="muted">Fill assets, pick a framework and techniques, then compose.</p>
 
-                <label className="field">
-                  Framework ID
-                  <input
-                    className="input"
-                    value={frameworkId}
-                    onChange={(event) => setFrameworkId(event.target.value)}
-                  />
-                </label>
+              <form onSubmit={onCompose}>
+                <AssetEditor assets={assets} fieldReport={fieldReport} onChange={setAssets} />
 
-                <label className="field">
-                  Technique IDs (comma separated)
-                  <input
-                    className="input"
-                    value={techniqueIdsInput}
-                    onChange={(event) => setTechniqueIdsInput(event.target.value)}
-                  />
-                </label>
+                <div style={{ margin: "0.6rem 0" }}>
+                  <button type="button" className="btn btn-secondary" onClick={() => void onNormalize()}>
+                    Normalize &amp; check fields
+                  </button>
+                </div>
 
-                <label className="field">
-                  Composed Output
-                  <textarea
-                    className="textarea"
-                    rows={4}
-                    value={composedOutput}
-                    onChange={(event) => setComposedOutput(event.target.value)}
-                  />
-                </label>
+                <FrameworkSelector frameworks={frameworks} selectedId={frameworkId} onSelect={setFrameworkId} />
+                <TechniqueToggles techniques={techniques} selectedIds={techniqueIds} onToggle={setTechniqueIds} />
 
-                <button className="btn btn-primary" type="submit" disabled={createVersionLoading}>
-                  {createVersionLoading ? "Creating version..." : "Create version"}
-                </button>
+                <div style={{ marginTop: "0.8rem" }}>
+                  <button className="btn btn-primary" type="submit" disabled={composeLoading || !frameworkId}>
+                    {composeLoading ? "Composing..." : "Compose prompt"}
+                  </button>
+                </div>
               </form>
+
+              {diagnostics.length > 0 ? (
+                <div style={{ marginTop: "0.8rem" }}>
+                  <DiagnosticPanel diagnostics={diagnostics} />
+                </div>
+              ) : null}
+
+              {composeResult ? (
+                <div style={{ marginTop: "0.8rem" }}>
+                  <h3>Composed Output</h3>
+                  <pre
+                    className="card mono"
+                    style={{ whiteSpace: "pre-wrap", fontSize: "0.85rem", maxHeight: "400px", overflow: "auto" }}
+                  >
+                    {composeResult.composedOutput}
+                  </pre>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ marginTop: "0.5rem" }}
+                    disabled={saveVersionLoading}
+                    onClick={() => void onSaveVersion()}
+                  >
+                    {saveVersionLoading ? "Saving version..." : "Save as new version"}
+                  </button>
+                </div>
+              ) : null}
             </article>
 
             <article className="card">
-              <h2>Versions</h2>
-              <p className="muted">Endpoint: GET /api/v1/prompts/{`{promptID}`}/versions</p>
+              <div className="row">
+                <h2>Versions</h2>
+                <button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>
+                  Refresh
+                </button>
+              </div>
               {versions.length === 0 ? (
                 <p>No versions yet.</p>
               ) : (
@@ -248,13 +302,25 @@ export default function PromptDetailPage() {
                       <p>
                         <strong>Version #{version.versionNumber}</strong>
                       </p>
-                      <p className="mono">ID: {version.id}</p>
+                      <p className="mono" style={{ fontSize: "0.8rem" }}>
+                        ID: {version.id}
+                      </p>
                       <p className="muted">Framework: {version.frameworkId || "-"}</p>
                       <p className="muted">
-                        Techniques:{" "}
-                        {version.techniqueIds.length > 0 ? version.techniqueIds.join(", ") : "none"}
+                        Techniques: {version.techniqueIds?.length > 0 ? version.techniqueIds.join(", ") : "none"}
                       </p>
-                      <p>{version.composedOutput || "No composed output"}</p>
+                      {version.composedOutput ? (
+                        <details>
+                          <summary className="muted" style={{ cursor: "pointer" }}>
+                            Show composed output
+                          </summary>
+                          <pre style={{ whiteSpace: "pre-wrap", fontSize: "0.85rem", marginTop: "0.3rem" }}>
+                            {version.composedOutput}
+                          </pre>
+                        </details>
+                      ) : (
+                        <p className="muted">No composed output</p>
+                      )}
                     </li>
                   ))}
                 </ul>

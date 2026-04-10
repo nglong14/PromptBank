@@ -1,12 +1,18 @@
 import type {
   ApiErrorResponse,
+  Assets,
   AuthResponse,
+  ComposeResponse,
   DerivePromptResponse,
+  Framework,
   HealthResponse,
+  NormalizedAssetsResponse,
   Prompt,
   PromptListResponse,
   PromptVersion,
   PromptVersionListResponse,
+  Technique,
+  ValidateSlotsResponse,
 } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/backend";
@@ -156,6 +162,48 @@ export async function derivePrompt(
   },
 ): Promise<DerivePromptResponse> {
   return request<DerivePromptResponse>("/api/v1/prompts/derive", {
+    method: "POST",
+    token,
+    body: input,
+  });
+}
+
+export async function listFrameworks(token: string): Promise<{ items: Framework[] }> {
+  return request<{ items: Framework[] }>("/api/v1/frameworks", { token });
+}
+
+export async function listTechniques(token: string): Promise<{ items: Technique[] }> {
+  return request<{ items: Technique[] }>("/api/v1/techniques", { token });
+}
+
+export async function normalizeAssets(
+  token: string,
+  assets: Assets,
+): Promise<NormalizedAssetsResponse> {
+  return request<NormalizedAssetsResponse>("/api/v1/assets/normalize", {
+    method: "POST",
+    token,
+    body: { assets },
+  });
+}
+
+export async function validateSlots(
+  token: string,
+  assets: Assets,
+  frameworkId: string,
+): Promise<ValidateSlotsResponse> {
+  return request<ValidateSlotsResponse>("/api/v1/assets/validate", {
+    method: "POST",
+    token,
+    body: { assets, frameworkId },
+  });
+}
+
+export async function compose(
+  token: string,
+  input: { assets: Assets; frameworkId: string; techniqueIds: string[] },
+): Promise<ComposeResponse> {
+  return request<ComposeResponse>("/api/v1/compose", {
     method: "POST",
     token,
     body: input,

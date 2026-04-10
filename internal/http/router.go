@@ -32,6 +32,7 @@ func NewRouter(deps Dependencies) http.Handler {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(authMiddleware(deps.JWTManager, deps.TokenPrefix))
+
 		r.Get("/prompts", listPromptsHandler(deps))
 		r.Post("/prompts", createPromptHandler(deps))
 		r.Get("/prompts/{promptID}", getPromptHandler(deps))
@@ -39,6 +40,12 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Post("/prompts/{promptID}/versions", createPromptVersionHandler(deps))
 		r.Get("/prompts/{promptID}/versions", listPromptVersionsHandler(deps))
 		r.Post("/prompts/derive", derivePromptHandler(deps))
+
+		r.Get("/frameworks", listFrameworksHandler())
+		r.Get("/techniques", listTechniquesHandler())
+		r.Post("/assets/normalize", normalizeAssetsHandler())
+		r.Post("/assets/validate", validateSlotsHandler())
+		r.Post("/compose", composeHandler())
 	})
 
 	return r
