@@ -18,11 +18,11 @@ type ComposeInput struct {
 }
 
 type ComposeOutput struct {
-	ComposedOutput string                    `json:"composedOutput"`
-	SlotMap        []framework.SlotMapping   `json:"slotMap"`
-	Diagnostics    []validation.Diagnostic   `json:"diagnostics"`
-	FrameworkID    string                    `json:"frameworkId"`
-	TechniqueIDs   []string                  `json:"techniqueIds"`
+	ComposedOutput string                  `json:"composedOutput"`
+	SlotMap        []framework.SlotMapping `json:"slotMap"`
+	Diagnostics    []validation.Diagnostic `json:"diagnostics"`
+	FrameworkID    string                  `json:"frameworkId"`
+	TechniqueIDs   []string                `json:"techniqueIds"`
 }
 
 func Compose(input ComposeInput) (ComposeOutput, error) {
