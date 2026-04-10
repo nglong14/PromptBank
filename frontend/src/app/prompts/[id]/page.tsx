@@ -7,6 +7,7 @@ import AssetEditor from "@/components/AssetEditor";
 import FrameworkSelector from "@/components/FrameworkSelector";
 import TechniqueToggles from "@/components/TechniqueToggles";
 import DiagnosticPanel from "@/components/DiagnosticPanel";
+import QuestionWizard from "@/components/QuestionWizard";
 import {
   compose,
   createPromptVersion,
@@ -14,6 +15,9 @@ import {
   listFrameworks,
   listPromptVersions,
   listTechniques,
+  llmNormalize,
+  llmRefine,
+  llmScore,
   normalizeAssets,
   updatePrompt,
 } from "@/lib/api";
@@ -25,6 +29,8 @@ import type {
   Framework,
   Prompt,
   PromptVersion,
+  QualityScore,
+  RefineMessage,
   SlotDiagnostic,
   Technique,
 } from "@/lib/types";
@@ -45,6 +51,14 @@ const emptyAssets: Assets = {
   goal: "",
 };
 
+function qualityColor(score: number): string {
+  if (score >= 8) return "#16a34a";
+  if (score >= 5) return "#d97706";
+  return "#dc2626";
+}
+
+type BuildMode = "wizard" | "normalizing" | "editor";
+
 export default function PromptDetailPage() {
   const params = useParams<{ id: string }>();
   const promptId = params.id;
@@ -60,6 +74,7 @@ export default function PromptDetailPage() {
   const [tagsInput, setTagsInput] = useState("");
   const [updateLoading, setUpdateLoading] = useState(false);
 
+  // Compose state
   const [assets, setAssets] = useState<Assets>(emptyAssets);
   const [fieldReport, setFieldReport] = useState<Record<string, FieldQuality> | null>(null);
   const [frameworkId, setFrameworkId] = useState("");
@@ -71,6 +86,20 @@ export default function PromptDetailPage() {
 
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [techniques, setTechniques] = useState<Technique[]>([]);
+
+  // Wizard state
+  const [buildMode, setBuildMode] = useState<BuildMode>("wizard");
+  const [wizardError, setWizardError] = useState("");
+
+  // Quality scoring state
+  const [qualityScore, setQualityScore] = useState<QualityScore | null>(null);
+  const [qualityLoading, setQualityLoading] = useState(false);
+
+  // Refinement state
+  const [refineHistory, setRefineHistory] = useState<RefineMessage[]>([]);
+  const [refineFeedback, setRefineFeedback] = useState("");
+  const [refineLoading, setRefineLoading] = useState(false);
+  const [refineError, setRefineError] = useState("");
 
   const loadAll = useCallback(async () => {
     const token = getToken();
@@ -106,6 +135,45 @@ export default function PromptDetailPage() {
     void loadAll();
   }, [loadAll]);
 
+  async function onWizardComplete(answers: Record<string, string>) {
+    const token = getToken();
+    if (!token) return;
+
+    setBuildMode("normalizing");
+    setWizardError("");
+
+    try {
+      const res = await llmNormalize(token, answers);
+      setAssets(res.assets);
+      if (res.suggestedFrameworkId) {
+        setFrameworkId(res.suggestedFrameworkId);
+      }
+      setBuildMode("editor");
+    } catch (err) {
+      setWizardError(err instanceof Error ? err.message : "Failed to interpret your answers. Please try again.");
+      setBuildMode("wizard");
+    }
+  }
+
+  function resetCompose() {
+    setComposeResult(null);
+    setDiagnostics([]);
+    setQualityScore(null);
+    setRefineHistory([]);
+    setRefineError("");
+    setRefineFeedback("");
+  }
+
+  function switchToWizard() {
+    setAssets(emptyAssets);
+    setFieldReport(null);
+    setFrameworkId("");
+    setTechniqueIds([]);
+    setWizardError("");
+    resetCompose();
+    setBuildMode("wizard");
+  }
+
   async function onNormalize() {
     const token = getToken();
     if (!token) return;
@@ -116,6 +184,15 @@ export default function PromptDetailPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Normalize failed");
     }
+  }
+
+  function silentlyScore(output: string, token: string) {
+    setQualityScore(null);
+    setQualityLoading(true);
+    llmScore(token, output)
+      .then(setQualityScore)
+      .catch(() => {})
+      .finally(() => setQualityLoading(false));
   }
 
   async function onCompose(event: FormEvent<HTMLFormElement>) {
@@ -129,16 +206,55 @@ export default function PromptDetailPage() {
 
     setComposeLoading(true);
     setError("");
-    setComposeResult(null);
-    setDiagnostics([]);
+    resetCompose();
     try {
       const res = await compose(token, { assets, frameworkId, techniqueIds });
       setComposeResult(res);
       setDiagnostics(res.diagnostics ?? []);
+      silentlyScore(res.composedOutput, token);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Composition failed");
     } finally {
       setComposeLoading(false);
+    }
+  }
+
+  async function onRefine() {
+    const token = getToken();
+    if (!token || !composeResult || !refineFeedback.trim()) return;
+
+    setRefineLoading(true);
+    setRefineError("");
+
+    const currentFeedback = refineFeedback;
+
+    try {
+      const res = await llmRefine(token, {
+        assets,
+        composedOutput: composeResult.composedOutput,
+        userFeedback: currentFeedback,
+        history: refineHistory,
+      });
+
+      const userMsg: RefineMessage = { role: "user", content: currentFeedback };
+      const agentMsg: RefineMessage = { role: "agent", content: res.explanation };
+      setRefineHistory((h) => [...h, userMsg, agentMsg]);
+      setRefineFeedback("");
+      setAssets(res.updatedAssets);
+
+      // Auto-recompose with updated assets
+      const recomposeRes = await compose(token, {
+        assets: res.updatedAssets,
+        frameworkId,
+        techniqueIds,
+      });
+      setComposeResult(recomposeRes);
+      setDiagnostics(recomposeRes.diagnostics ?? []);
+      silentlyScore(recomposeRes.composedOutput, token);
+    } catch (err) {
+      setRefineError(err instanceof Error ? err.message : "Refinement failed");
+    } finally {
+      setRefineLoading(false);
     }
   }
 
@@ -156,12 +272,12 @@ export default function PromptDetailPage() {
         techniqueIds: composeResult.techniqueIds,
         composedOutput: composeResult.composedOutput,
       });
-      setComposeResult(null);
-      setDiagnostics([]);
       setAssets(emptyAssets);
       setFieldReport(null);
       setFrameworkId("");
       setTechniqueIds([]);
+      resetCompose();
+      setBuildMode("wizard");
       await loadAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save version");
@@ -236,54 +352,208 @@ export default function PromptDetailPage() {
             </article>
 
             <article className="card">
-              <h2>Compose New Version</h2>
-              <p className="muted">Fill assets, pick a framework and techniques, then compose.</p>
-
-              <form onSubmit={onCompose}>
-                <AssetEditor assets={assets} fieldReport={fieldReport} onChange={setAssets} />
-
-                <div style={{ margin: "0.6rem 0" }}>
-                  <button type="button" className="btn btn-secondary" onClick={() => void onNormalize()}>
-                    Normalize &amp; check fields
-                  </button>
+              <div className="row" style={{ marginBottom: "0.8rem" }}>
+                <div>
+                  <h2 style={{ margin: 0 }}>Compose New Version</h2>
+                  <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.9rem" }}>
+                    {buildMode === "editor"
+                      ? "Review and edit your prompt assets, then compose."
+                      : "Answer a few questions and we'll build the prompt for you."}
+                  </p>
                 </div>
-
-                <FrameworkSelector frameworks={frameworks} selectedId={frameworkId} onSelect={setFrameworkId} />
-                <TechniqueToggles techniques={techniques} selectedIds={techniqueIds} onToggle={setTechniqueIds} />
-
-                <div style={{ marginTop: "0.8rem" }}>
-                  <button className="btn btn-primary" type="submit" disabled={composeLoading || !frameworkId}>
-                    {composeLoading ? "Composing..." : "Compose prompt"}
-                  </button>
-                </div>
-              </form>
-
-              {diagnostics.length > 0 ? (
-                <div style={{ marginTop: "0.8rem" }}>
-                  <DiagnosticPanel diagnostics={diagnostics} />
-                </div>
-              ) : null}
-
-              {composeResult ? (
-                <div style={{ marginTop: "0.8rem" }}>
-                  <h3>Composed Output</h3>
-                  <pre
-                    className="card mono"
-                    style={{ whiteSpace: "pre-wrap", fontSize: "0.85rem", maxHeight: "400px", overflow: "auto" }}
-                  >
-                    {composeResult.composedOutput}
-                  </pre>
+                {buildMode === "editor" ? (
                   <button
                     type="button"
-                    className="btn btn-primary"
-                    style={{ marginTop: "0.5rem" }}
-                    disabled={saveVersionLoading}
-                    onClick={() => void onSaveVersion()}
+                    className="btn btn-secondary"
+                    style={{ fontSize: "0.85rem", whiteSpace: "nowrap" }}
+                    onClick={switchToWizard}
                   >
-                    {saveVersionLoading ? "Saving version..." : "Save as new version"}
+                    Start over with questions
                   </button>
+                ) : null}
+              </div>
+
+              {buildMode === "normalizing" ? (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: "0.6rem",
+                    padding: "2.5rem 1rem",
+                    color: "var(--muted)",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "28px",
+                      height: "28px",
+                      border: "3px solid var(--border)",
+                      borderTopColor: "var(--primary)",
+                      borderRadius: "50%",
+                      animation: "spin 0.8s linear infinite",
+                    }}
+                  />
+                  <p style={{ margin: 0 }}>Interpreting your answers with AI...</p>
+                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
                 </div>
-              ) : null}
+              ) : buildMode === "wizard" ? (
+                <QuestionWizard
+                  onComplete={(answers) => void onWizardComplete(answers)}
+                  onCancel={() => setBuildMode("editor")}
+                  error={wizardError}
+                />
+              ) : (
+                <form onSubmit={onCompose}>
+                  {wizardError && (
+                    <p className="error" style={{ marginBottom: "0.6rem" }}>
+                      {wizardError}
+                    </p>
+                  )}
+
+                  <AssetEditor assets={assets} fieldReport={fieldReport} onChange={setAssets} />
+
+                  <div style={{ margin: "0.6rem 0" }}>
+                    <button type="button" className="btn btn-secondary" onClick={() => void onNormalize()}>
+                      Normalize &amp; check fields
+                    </button>
+                  </div>
+
+                  <FrameworkSelector frameworks={frameworks} selectedId={frameworkId} onSelect={setFrameworkId} />
+                  <TechniqueToggles techniques={techniques} selectedIds={techniqueIds} onToggle={setTechniqueIds} />
+
+                  <div style={{ marginTop: "0.8rem" }}>
+                    <button className="btn btn-primary" type="submit" disabled={composeLoading || !frameworkId}>
+                      {composeLoading ? "Composing..." : "Compose prompt"}
+                    </button>
+                  </div>
+
+                  {diagnostics.length > 0 ? (
+                    <div style={{ marginTop: "0.8rem" }}>
+                      <DiagnosticPanel diagnostics={diagnostics} />
+                    </div>
+                  ) : null}
+
+                  {composeResult ? (
+                    <div style={{ marginTop: "0.8rem" }}>
+                      <div className="row" style={{ marginBottom: "0.4rem" }}>
+                        <h3 style={{ margin: 0 }}>Composed Output</h3>
+                        {qualityLoading ? (
+                          <span className="muted" style={{ fontSize: "0.85rem" }}>
+                            Scoring...
+                          </span>
+                        ) : qualityScore ? (
+                          <span
+                            style={{
+                              color: qualityColor(qualityScore.score),
+                              fontWeight: 600,
+                              fontSize: "0.9rem",
+                            }}
+                          >
+                            Quality: {qualityScore.score}/10
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {qualityScore?.feedback && (
+                        <p className="muted" style={{ fontSize: "0.85rem", margin: "0 0 0.6rem" }}>
+                          {qualityScore.feedback}
+                        </p>
+                      )}
+
+                      <pre
+                        className="card mono"
+                        style={{
+                          whiteSpace: "pre-wrap",
+                          fontSize: "0.85rem",
+                          maxHeight: "400px",
+                          overflow: "auto",
+                        }}
+                      >
+                        {composeResult.composedOutput}
+                      </pre>
+
+                      {/* Refine with AI panel */}
+                      <div className="card" style={{ marginTop: "0.8rem" }}>
+                        <h3 style={{ margin: "0 0 0.3rem" }}>Refine with AI</h3>
+                        <p className="muted" style={{ margin: "0 0 0.8rem", fontSize: "0.9rem" }}>
+                          Describe what you'd like to change. The AI will update the prompt and re-compose it for you.
+                        </p>
+
+                        {refineHistory.length > 0 && (
+                          <div
+                            style={{
+                              borderTop: "1px solid var(--border)",
+                              paddingTop: "0.6rem",
+                              marginBottom: "0.8rem",
+                              display: "grid",
+                              gap: "0.5rem",
+                            }}
+                          >
+                            {refineHistory.map((msg, i) => (
+                              <div
+                                key={i}
+                                style={{
+                                  display: "flex",
+                                  gap: "0.5rem",
+                                  alignItems: "flex-start",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontWeight: 600,
+                                    fontSize: "0.8rem",
+                                    color: msg.role === "user" ? "var(--primary)" : "var(--muted)",
+                                    whiteSpace: "nowrap",
+                                    marginTop: "0.1rem",
+                                  }}
+                                >
+                                  {msg.role === "user" ? "You" : "AI"}
+                                </span>
+                                <span style={{ fontSize: "0.9rem" }}>{msg.content}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {refineError && (
+                          <p className="error" style={{ marginBottom: "0.5rem" }}>
+                            {refineError}
+                          </p>
+                        )}
+
+                        <textarea
+                          className="textarea"
+                          rows={2}
+                          placeholder='e.g. "Make it sound less formal" or "Add more constraints about response length"'
+                          value={refineFeedback}
+                          onChange={(e) => setRefineFeedback(e.target.value)}
+                          disabled={refineLoading}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          style={{ marginTop: "0.5rem" }}
+                          onClick={() => void onRefine()}
+                          disabled={refineLoading || !refineFeedback.trim()}
+                        >
+                          {refineLoading ? "Refining..." : "Refine prompt"}
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{ marginTop: "0.8rem" }}
+                        disabled={saveVersionLoading}
+                        onClick={() => void onSaveVersion()}
+                      >
+                        {saveVersionLoading ? "Saving version..." : "Save as new version"}
+                      </button>
+                    </div>
+                  ) : null}
+                </form>
+              )}
             </article>
 
             <article className="card">

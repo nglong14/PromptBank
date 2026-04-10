@@ -120,3 +120,38 @@ export type ValidateSlotsResponse = {
   diagnostics: SlotDiagnostic[];
   hasErrors: boolean;
 };
+
+export type LLMNormalizeResponse = {
+  assets: Assets;
+  suggestedFrameworkId?: string;
+  confidence: number;
+};
+
+export type FrameworkSuggestion = {
+  frameworkId: string;
+  confidence: number;
+  rationale: string;
+};
+
+export type QualityScore = {
+  score: number;
+  feedback: string;
+};
+
+export type RefineMessage = {
+  role: "user" | "agent";
+  content: string;
+};
+
+export type RefineRequest = {
+  assets: Assets;
+  composedOutput: string;
+  userFeedback: string;
+  history: RefineMessage[];
+};
+
+export type RefineResponse = {
+  updatedAssets: Assets;
+  explanation: string;
+  changedFields: string[];
+};

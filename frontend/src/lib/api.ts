@@ -5,12 +5,17 @@ import type {
   ComposeResponse,
   DerivePromptResponse,
   Framework,
+  FrameworkSuggestion,
   HealthResponse,
+  LLMNormalizeResponse,
   NormalizedAssetsResponse,
   Prompt,
   PromptListResponse,
   PromptVersion,
   PromptVersionListResponse,
+  QualityScore,
+  RefineRequest,
+  RefineResponse,
   Technique,
   ValidateSlotsResponse,
 } from "@/lib/types";
@@ -204,6 +209,50 @@ export async function compose(
   input: { assets: Assets; frameworkId: string; techniqueIds: string[] },
 ): Promise<ComposeResponse> {
   return request<ComposeResponse>("/api/v1/compose", {
+    method: "POST",
+    token,
+    body: input,
+  });
+}
+
+export async function llmNormalize(
+  token: string,
+  answers: Record<string, string>,
+): Promise<LLMNormalizeResponse> {
+  return request<LLMNormalizeResponse>("/api/v1/llm/normalize", {
+    method: "POST",
+    token,
+    body: { answers },
+  });
+}
+
+export async function llmSuggestFramework(
+  token: string,
+  assets: Assets,
+): Promise<FrameworkSuggestion> {
+  return request<FrameworkSuggestion>("/api/v1/llm/suggest-framework", {
+    method: "POST",
+    token,
+    body: { assets },
+  });
+}
+
+export async function llmScore(
+  token: string,
+  composedOutput: string,
+): Promise<QualityScore> {
+  return request<QualityScore>("/api/v1/llm/score", {
+    method: "POST",
+    token,
+    body: { composedOutput },
+  });
+}
+
+export async function llmRefine(
+  token: string,
+  input: RefineRequest,
+): Promise<RefineResponse> {
+  return request<RefineResponse>("/api/v1/llm/refine", {
     method: "POST",
     token,
     body: input,
