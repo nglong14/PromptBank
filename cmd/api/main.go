@@ -11,6 +11,7 @@ import (
 	"github.com/nglong14/PromptBank/internal/config"
 	"github.com/nglong14/PromptBank/internal/db"
 	apihttp "github.com/nglong14/PromptBank/internal/http"
+	"github.com/nglong14/PromptBank/internal/llm"
 	"github.com/nglong14/PromptBank/internal/repository"
 	"github.com/nglong14/PromptBank/internal/security"
 )
@@ -36,12 +37,27 @@ func main() {
 	promptRepo := repository.NewPromptRepository(pool)
 	jwtManager := security.NewJWTManager(cfg.JWTSecret, cfg.JWTExpiresIn)
 
+	// Initialize the LLM client (optional — LLM endpoints return 503 when nil).
+	var llmClient *llm.Client
+	if cfg.GeminiAPIKey != "" {
+		c, err := llm.NewClient(cfg.GeminiAPIKey, cfg.GeminiModel, cfg.LLMMaxConcurrent)
+		if err != nil {
+			log.Fatalf("llm client: %v", err)
+		}
+		defer c.Close()
+		llmClient = c
+		log.Printf("llm: gemini enabled (model=%s, maxConcurrent=%d)", cfg.GeminiModel, cfg.LLMMaxConcurrent)
+	} else {
+		log.Println("llm: GEMINI_API_KEY not set — LLM features disabled")
+	}
+
 	// Initialize HTTP router
 	router := apihttp.NewRouter(apihttp.Dependencies{
 		UserRepo:    userRepo,
 		PromptRepo:  promptRepo,
 		JWTManager:  jwtManager,
 		TokenPrefix: "Bearer",
+		LLMClient:   llmClient,
 	})
 
 	server := &http.Server{
