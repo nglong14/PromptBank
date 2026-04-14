@@ -14,7 +14,7 @@ const maxToolCalls = 8
 
 // RefineMessage represents one turn in the refinement conversation history.
 type RefineMessage struct {
-	Role    string `json:"role"`    // "user" or "agent"
+	Role    string `json:"role"` // "user" or "agent"
 	Content string `json:"content"`
 }
 

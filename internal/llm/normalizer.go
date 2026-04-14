@@ -41,7 +41,7 @@ Return ONLY a valid JSON object with these exact keys:
 
 Do not include any explanation or markdown fences — just the JSON object.`
 
-// Retouch the user's raw wizard answers into clean asset fields, 
+// Retouch the user's raw wizard answers into clean asset fields,
 // return the polished assets, a confidence score, and (if >= 0.6) the best-matching framework ID determined by the rule engine
 func (c *Client) Normalize(ctx context.Context, answers map[string]string) (NormalizeResponse, error) {
 	userPrompt := buildAnswersPrompt(answers)
@@ -83,7 +83,7 @@ func buildAnswersPrompt(answers map[string]string) string {
 		{"examples", "Example input and output"},
 	}
 
-	var sb strings.Builder	// Build string
+	var sb strings.Builder // Build string
 	sb.WriteString("Here are the user's answers to the prompt-building questions:\n\n")
 	for _, field := range order {
 		val := strings.TrimSpace(answers[field.key])

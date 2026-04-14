@@ -12,9 +12,9 @@ type Config struct {
 	JWTSecret    string
 	JWTExpiresIn time.Duration
 	// LLM configuration — optional; LLM features are disabled when GeminiAPIKey is empty.
-	GeminiAPIKey      string
-	GeminiModel       string
-	LLMMaxConcurrent  int
+	GeminiAPIKey     string
+	GeminiModel      string
+	LLMMaxConcurrent int
 }
 
 func FromEnv() Config {
