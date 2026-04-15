@@ -36,13 +36,15 @@ type RefineResponse struct {
 const refinerSystemPrompt = `You are a prompt engineering assistant helping users iteratively improve their AI prompts.
 You will be given the current prompt assets, the composed prompt output, and feedback from the user.
 
-Use the tools to make surgical, targeted edits to the prompt assets based on the feedback.
-When you are satisfied that all requested changes have been made, call explain_change to finish.
+You MUST use the provided tools to make changes. Do NOT respond with plain text.
+Use update_field, add_example, or remove_example to make surgical edits based on the feedback.
+After all edits (or if no edits are needed), you MUST call explain_change to finish.
 
 Guidelines:
 - Only change what the user explicitly asked for — do not make unrequested edits.
 - Make one targeted change at a time; you can make multiple tool calls.
-- Always call explain_change when done, even if no changes were needed.`
+- ALWAYS finish by calling explain_change, even if no fields were modified.
+- Never respond with text alone — every response must include at least one tool call.`
 
 // refinerTools defines the four tools the agent can call.
 var refinerTools = []*genai.Tool{{
@@ -124,6 +126,11 @@ func (c *Client) Refine(ctx context.Context, req RefineRequest) (RefineResponse,
 	m := c.newModel(refinerTools...)
 	m.SystemInstruction = &genai.Content{
 		Parts: []genai.Part{genai.Text(refinerSystemPrompt)},
+	}
+	m.ToolConfig = &genai.ToolConfig{
+		FunctionCallingConfig: &genai.FunctionCallingConfig{
+			Mode: genai.FunctionCallingAny,
+		},
 	}
 
 	cs := m.StartChat()

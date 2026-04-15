@@ -100,6 +100,8 @@ export default function PromptDetailPage() {
   const [refineFeedback, setRefineFeedback] = useState("");
   const [refineLoading, setRefineLoading] = useState(false);
   const [refineError, setRefineError] = useState("");
+  const [showSavePrompt, setShowSavePrompt] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const loadAll = useCallback(async () => {
     const token = getToken();
@@ -162,6 +164,8 @@ export default function PromptDetailPage() {
     setRefineHistory([]);
     setRefineError("");
     setRefineFeedback("");
+    setShowSavePrompt(false);
+    setCopied(false);
   }
 
   function switchToWizard() {
@@ -251,10 +255,22 @@ export default function PromptDetailPage() {
       setComposeResult(recomposeRes);
       setDiagnostics(recomposeRes.diagnostics ?? []);
       silentlyScore(recomposeRes.composedOutput, token);
+      setShowSavePrompt(true);
     } catch (err) {
       setRefineError(err instanceof Error ? err.message : "Refinement failed");
     } finally {
       setRefineLoading(false);
+    }
+  }
+
+  async function onCopy() {
+    if (!composeResult) return;
+    try {
+      await navigator.clipboard.writeText(composeResult.composedOutput);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard API may not be available
     }
   }
 
@@ -351,251 +367,283 @@ export default function PromptDetailPage() {
               </form>
             </article>
 
-            <article className="card">
-              <div className="row" style={{ marginBottom: "0.8rem" }}>
-                <div>
-                  <h2 style={{ margin: 0 }}>Compose New Version</h2>
-                  <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.9rem" }}>
-                    {buildMode === "editor"
-                      ? "Review and edit your prompt assets, then compose."
-                      : "Answer a few questions and we'll build the prompt for you."}
-                  </p>
+            <div className="two-col">
+              <article className="card">
+                <div className="row" style={{ marginBottom: "0.8rem" }}>
+                  <div>
+                    <h2 style={{ margin: 0 }}>Compose New Version</h2>
+                    <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.9rem" }}>
+                      {buildMode === "editor"
+                        ? "Review and edit your prompt assets, then compose."
+                        : "Answer a few questions and we'll build the prompt for you."}
+                    </p>
+                  </div>
+                  {buildMode === "editor" ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: "0.85rem", whiteSpace: "nowrap" }}
+                      onClick={switchToWizard}
+                    >
+                      Start over with questions
+                    </button>
+                  ) : null}
                 </div>
-                {buildMode === "editor" ? (
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ fontSize: "0.85rem", whiteSpace: "nowrap" }}
-                    onClick={switchToWizard}
-                  >
-                    Start over with questions
-                  </button>
-                ) : null}
-              </div>
 
-              {buildMode === "normalizing" ? (
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: "0.6rem",
-                    padding: "2.5rem 1rem",
-                    color: "var(--muted)",
-                  }}
-                >
+                {buildMode === "normalizing" ? (
                   <div
                     style={{
-                      width: "28px",
-                      height: "28px",
-                      border: "3px solid var(--border)",
-                      borderTopColor: "var(--primary)",
-                      borderRadius: "50%",
-                      animation: "spin 0.8s linear infinite",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: "0.6rem",
+                      padding: "2.5rem 1rem",
+                      color: "var(--muted)",
                     }}
+                  >
+                    <div
+                      style={{
+                        width: "28px",
+                        height: "28px",
+                        border: "3px solid var(--border)",
+                        borderTopColor: "var(--primary)",
+                        borderRadius: "50%",
+                        animation: "spin 0.8s linear infinite",
+                      }}
+                    />
+                    <p style={{ margin: 0 }}>Interpreting your answers with AI...</p>
+                    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                  </div>
+                ) : buildMode === "wizard" ? (
+                  <QuestionWizard
+                    onComplete={(answers) => void onWizardComplete(answers)}
+                    onCancel={() => setBuildMode("editor")}
+                    error={wizardError}
                   />
-                  <p style={{ margin: 0 }}>Interpreting your answers with AI...</p>
-                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-                </div>
-              ) : buildMode === "wizard" ? (
-                <QuestionWizard
-                  onComplete={(answers) => void onWizardComplete(answers)}
-                  onCancel={() => setBuildMode("editor")}
-                  error={wizardError}
-                />
-              ) : (
-                <form onSubmit={onCompose}>
-                  {wizardError && (
-                    <p className="error" style={{ marginBottom: "0.6rem" }}>
-                      {wizardError}
-                    </p>
-                  )}
+                ) : (
+                  <form onSubmit={onCompose}>
+                    {wizardError && (
+                      <p className="error" style={{ marginBottom: "0.6rem" }}>
+                        {wizardError}
+                      </p>
+                    )}
 
-                  <AssetEditor assets={assets} fieldReport={fieldReport} onChange={setAssets} />
+                    <AssetEditor assets={assets} fieldReport={fieldReport} onChange={setAssets} />
 
-                  <div style={{ margin: "0.6rem 0" }}>
-                    <button type="button" className="btn btn-secondary" onClick={() => void onNormalize()}>
-                      Normalize &amp; check fields
-                    </button>
-                  </div>
-
-                  <FrameworkSelector frameworks={frameworks} selectedId={frameworkId} onSelect={setFrameworkId} />
-                  <TechniqueToggles techniques={techniques} selectedIds={techniqueIds} onToggle={setTechniqueIds} />
-
-                  <div style={{ marginTop: "0.8rem" }}>
-                    <button className="btn btn-primary" type="submit" disabled={composeLoading || !frameworkId}>
-                      {composeLoading ? "Composing..." : "Compose prompt"}
-                    </button>
-                  </div>
-
-                  {diagnostics.length > 0 ? (
-                    <div style={{ marginTop: "0.8rem" }}>
-                      <DiagnosticPanel diagnostics={diagnostics} />
+                    <div style={{ margin: "0.6rem 0" }}>
+                      <button type="button" className="btn btn-secondary" onClick={() => void onNormalize()}>
+                        Normalize &amp; check fields
+                      </button>
                     </div>
-                  ) : null}
 
-                  {composeResult ? (
+                    <FrameworkSelector frameworks={frameworks} selectedId={frameworkId} onSelect={setFrameworkId} />
+                    <TechniqueToggles techniques={techniques} selectedIds={techniqueIds} onToggle={setTechniqueIds} assets={assets} onAssetsChange={setAssets} />
+
                     <div style={{ marginTop: "0.8rem" }}>
-                      <div className="row" style={{ marginBottom: "0.4rem" }}>
-                        <h3 style={{ margin: 0 }}>Composed Output</h3>
-                        {qualityLoading ? (
-                          <span className="muted" style={{ fontSize: "0.85rem" }}>
-                            Scoring...
-                          </span>
-                        ) : qualityScore ? (
-                          <span
-                            style={{
-                              color: qualityColor(qualityScore.score),
-                              fontWeight: 600,
-                              fontSize: "0.9rem",
-                            }}
-                          >
-                            Quality: {qualityScore.score}/10
-                          </span>
-                        ) : null}
+                      <button className="btn btn-primary" type="submit" disabled={composeLoading || !frameworkId}>
+                        {composeLoading ? "Composing..." : "Compose prompt"}
+                      </button>
+                    </div>
+
+                    {diagnostics.length > 0 ? (
+                      <div style={{ marginTop: "0.8rem" }}>
+                        <DiagnosticPanel diagnostics={diagnostics} />
                       </div>
+                    ) : null}
 
-                      {qualityScore?.feedback && (
-                        <p className="muted" style={{ fontSize: "0.85rem", margin: "0 0 0.6rem" }}>
-                          {qualityScore.feedback}
-                        </p>
-                      )}
-
-                      <pre
-                        className="card mono"
-                        style={{
-                          whiteSpace: "pre-wrap",
-                          fontSize: "0.85rem",
-                          maxHeight: "400px",
-                          overflow: "auto",
-                        }}
-                      >
-                        {composeResult.composedOutput}
-                      </pre>
-
-                      {/* Refine with AI panel */}
-                      <div className="card" style={{ marginTop: "0.8rem" }}>
-                        <h3 style={{ margin: "0 0 0.3rem" }}>Refine with AI</h3>
-                        <p className="muted" style={{ margin: "0 0 0.8rem", fontSize: "0.9rem" }}>
-                          Describe what you'd like to change. The AI will update the prompt and re-compose it for you.
-                        </p>
-
-                        {refineHistory.length > 0 && (
-                          <div
-                            style={{
-                              borderTop: "1px solid var(--border)",
-                              paddingTop: "0.6rem",
-                              marginBottom: "0.8rem",
-                              display: "grid",
-                              gap: "0.5rem",
-                            }}
-                          >
-                            {refineHistory.map((msg, i) => (
-                              <div
-                                key={i}
+                    {composeResult ? (
+                      <div style={{ marginTop: "0.8rem" }}>
+                        <div className="row" style={{ marginBottom: "0.4rem" }}>
+                          <h3 style={{ margin: 0 }}>Composed Output</h3>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                            {qualityLoading ? (
+                              <span className="muted" style={{ fontSize: "0.85rem" }}>
+                                Scoring...
+                              </span>
+                            ) : qualityScore ? (
+                              <span
+                                className="quality-badge"
                                 style={{
-                                  display: "flex",
-                                  gap: "0.5rem",
-                                  alignItems: "flex-start",
+                                  background: qualityColor(qualityScore.score),
                                 }}
                               >
-                                <span
-                                  style={{
-                                    fontWeight: 600,
-                                    fontSize: "0.8rem",
-                                    color: msg.role === "user" ? "var(--primary)" : "var(--muted)",
-                                    whiteSpace: "nowrap",
-                                    marginTop: "0.1rem",
-                                  }}
-                                >
-                                  {msg.role === "user" ? "You" : "AI"}
-                                </span>
-                                <span style={{ fontSize: "0.9rem" }}>{msg.content}</span>
-                              </div>
-                            ))}
+                                {qualityScore.score}/10
+                              </span>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              style={{ fontSize: "0.78rem", padding: "0.2rem 0.55rem" }}
+                              onClick={() => void onCopy()}
+                            >
+                              {copied ? "Copied!" : "Copy"}
+                            </button>
                           </div>
-                        )}
+                        </div>
 
-                        {refineError && (
-                          <p className="error" style={{ marginBottom: "0.5rem" }}>
-                            {refineError}
+                        {qualityScore?.feedback && (
+                          <p className="muted" style={{ fontSize: "0.85rem", margin: "0 0 0.6rem" }}>
+                            {qualityScore.feedback}
                           </p>
                         )}
 
-                        <textarea
-                          className="textarea"
-                          rows={2}
-                          placeholder='e.g. "Make it sound less formal" or "Add more constraints about response length"'
-                          value={refineFeedback}
-                          onChange={(e) => setRefineFeedback(e.target.value)}
-                          disabled={refineLoading}
-                        />
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          style={{ marginTop: "0.5rem" }}
-                          onClick={() => void onRefine()}
-                          disabled={refineLoading || !refineFeedback.trim()}
-                        >
-                          {refineLoading ? "Refining..." : "Refine prompt"}
-                        </button>
+                        <pre className="composed-output mono">
+                          {composeResult.composedOutput}
+                        </pre>
+
+                        {/* Refine with AI panel */}
+                        <div className="card" style={{ marginTop: "0.8rem" }}>
+                          <h3 style={{ margin: "0 0 0.3rem" }}>Refine with AI</h3>
+                          <p className="muted" style={{ margin: "0 0 0.8rem", fontSize: "0.9rem" }}>
+                            Describe what you&#39;d like to change. The AI will update the prompt and re-compose it for you.
+                          </p>
+
+                          {refineHistory.length > 0 && (
+                            <div
+                              style={{
+                                borderTop: "1px solid var(--border)",
+                                paddingTop: "0.6rem",
+                                marginBottom: "0.8rem",
+                                display: "grid",
+                                gap: "0.5rem",
+                              }}
+                            >
+                              {refineHistory.map((msg, i) => (
+                                <div
+                                  key={i}
+                                  className="refine-msg"
+                                >
+                                  <span
+                                    className={msg.role === "user" ? "refine-role refine-role-user" : "refine-role refine-role-agent"}
+                                  >
+                                    {msg.role === "user" ? "You" : "AI"}
+                                  </span>
+                                  <span style={{ fontSize: "0.9rem" }}>{msg.content}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {refineError && (
+                            <p className="error" style={{ marginBottom: "0.5rem" }}>
+                              {refineError}
+                            </p>
+                          )}
+
+                          <textarea
+                            className="textarea"
+                            rows={2}
+                            placeholder='e.g. "Make it sound less formal" or "Add more constraints about response length"'
+                            value={refineFeedback}
+                            onChange={(e) => setRefineFeedback(e.target.value)}
+                            disabled={refineLoading}
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            style={{ marginTop: "0.5rem" }}
+                            onClick={() => void onRefine()}
+                            disabled={refineLoading || !refineFeedback.trim()}
+                          >
+                            {refineLoading ? "Refining..." : "Refine prompt"}
+                          </button>
+                        </div>
+
+                        {showSavePrompt ? (
+                          <div className="save-prompt-bar">
+                            <span style={{ fontWeight: 500, fontSize: "0.9rem" }}>
+                              Refinement applied. Save as new version?
+                            </span>
+                            <div style={{ display: "flex", gap: "0.4rem" }}>
+                              <button
+                                type="button"
+                                className="btn btn-primary"
+                                style={{ fontSize: "0.85rem", padding: "0.3rem 0.7rem" }}
+                                disabled={saveVersionLoading}
+                                onClick={() => void onSaveVersion()}
+                              >
+                                {saveVersionLoading ? "Saving..." : "Save version"}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{ fontSize: "0.85rem", padding: "0.3rem 0.7rem" }}
+                                onClick={() => setShowSavePrompt(false)}
+                              >
+                                Keep editing
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            style={{ marginTop: "0.8rem" }}
+                            disabled={saveVersionLoading}
+                            onClick={() => void onSaveVersion()}
+                          >
+                            {saveVersionLoading ? "Saving version..." : "Save as new version"}
+                          </button>
+                        )}
                       </div>
+                    ) : null}
+                  </form>
+                )}
+              </article>
 
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        style={{ marginTop: "0.8rem" }}
-                        disabled={saveVersionLoading}
-                        onClick={() => void onSaveVersion()}
-                      >
-                        {saveVersionLoading ? "Saving version..." : "Save as new version"}
-                      </button>
-                    </div>
-                  ) : null}
-                </form>
-              )}
-            </article>
-
-            <article className="card">
-              <div className="row">
-                <h2>Versions</h2>
-                <button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>
-                  Refresh
-                </button>
-              </div>
-              {versions.length === 0 ? (
-                <p>No versions yet.</p>
-              ) : (
-                <ul className="list">
-                  {versions.map((version) => (
-                    <li key={version.id} className="card">
-                      <p>
-                        <strong>Version #{version.versionNumber}</strong>
-                      </p>
-                      <p className="mono" style={{ fontSize: "0.8rem" }}>
-                        ID: {version.id}
-                      </p>
-                      <p className="muted">Framework: {version.frameworkId || "-"}</p>
-                      <p className="muted">
-                        Techniques: {version.techniqueIds?.length > 0 ? version.techniqueIds.join(", ") : "none"}
-                      </p>
-                      {version.composedOutput ? (
-                        <details>
-                          <summary className="muted" style={{ cursor: "pointer" }}>
-                            Show composed output
+              <article className="card versions-panel">
+                <div className="row">
+                  <h2>Versions</h2>
+                  <button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>
+                    Refresh
+                  </button>
+                </div>
+                {versions.length === 0 ? (
+                  <p className="muted">No versions yet.</p>
+                ) : (
+                  <ul className="list">
+                    {versions.map((version) => (
+                      <li key={version.id} className="card version-card">
+                        <div className="row" style={{ marginBottom: "0.3rem" }}>
+                          <strong style={{ fontSize: "1rem" }}>v{version.versionNumber}</strong>
+                          <span className="muted" style={{ fontSize: "0.78rem" }}>
+                            {new Date(version.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginBottom: "0.4rem" }}>
+                          {version.frameworkId && (
+                            <span className="tag-pill">{version.frameworkId}</span>
+                          )}
+                          {version.techniqueIds?.map((tid) => (
+                            <span key={tid} className="tag-pill tag-pill-muted">{tid}</span>
+                          ))}
+                        </div>
+                        {version.composedOutput ? (
+                          <details>
+                            <summary className="muted" style={{ cursor: "pointer", fontSize: "0.85rem" }}>
+                              Show composed output
+                            </summary>
+                            <pre className="composed-output mono" style={{ marginTop: "0.3rem", maxHeight: "200px" }}>
+                              {version.composedOutput}
+                            </pre>
+                          </details>
+                        ) : (
+                          <p className="muted" style={{ fontSize: "0.85rem", margin: 0 }}>No composed output</p>
+                        )}
+                        <details style={{ marginTop: "0.3rem" }}>
+                          <summary className="muted" style={{ cursor: "pointer", fontSize: "0.78rem" }}>
+                            ID
                           </summary>
-                          <pre style={{ whiteSpace: "pre-wrap", fontSize: "0.85rem", marginTop: "0.3rem" }}>
-                            {version.composedOutput}
-                          </pre>
+                          <p className="mono" style={{ fontSize: "0.75rem", margin: "0.2rem 0 0", color: "var(--muted)" }}>
+                            {version.id}
+                          </p>
                         </details>
-                      ) : (
-                        <p className="muted">No composed output</p>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </article>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </article>
+            </div>
           </>
         )}
       </section>

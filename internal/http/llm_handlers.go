@@ -48,10 +48,7 @@ func llmNormalizeHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-// llmSuggestFrameworkHandler picks the best framework for the given assets.
-//
-// POST /api/v1/llm/suggest-framework
-// Body: { "assets": { ... } }
+// Picks the best framework for the given assets.
 func llmSuggestFrameworkHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if deps.LLMClient == nil {
@@ -76,10 +73,7 @@ func llmSuggestFrameworkHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-// llmScoreHandler silently scores a composed prompt on 4 quality dimensions.
-//
-// POST /api/v1/llm/score
-// Body: { "composedOutput": "..." }
+// Scores a composed prompt on 4 quality dimensions.
 func llmScoreHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if deps.LLMClient == nil {
@@ -108,12 +102,34 @@ func llmScoreHandler(deps Dependencies) http.HandlerFunc {
 	}
 }
 
-// llmRefineHandler runs the iterative refinement agent. The refiner can hold
-// a connection open for up to 90 seconds (8 tool-call iterations × ~4 s each),
-// so a per-handler timeout is applied instead of relying on a global WriteTimeout.
-//
-// POST /api/v1/llm/refine
-// Body: { "assets": {...}, "composedOutput": "...", "userFeedback": "...", "history": [...] }
+// Generates asset content for a selected technique.
+func llmSuggestTechniqueHandler(deps Dependencies) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if deps.LLMClient == nil {
+			llmUnavailable(w)
+			return
+		}
+
+		var req llm.SuggestTechniqueRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		if req.TechniqueID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "techniqueId must not be empty"})
+			return
+		}
+
+		result, err := deps.LLMClient.SuggestTechniqueAssets(r.Context(), req)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+// Runs the iterative refinement agent. The refiner can hold a connection open for up to 90 seconds (8 tool-call iterations × ~4 s each), so a per-handler timeout is applied instead of relying on a global WriteTimeout.
 func llmRefineHandler(deps Dependencies) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if deps.LLMClient == nil {
