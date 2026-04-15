@@ -155,3 +155,7 @@ export type RefineResponse = {
   explanation: string;
   changedFields: string[];
 };
+
+export type SuggestTechniqueResponse = {
+  assets: Assets;
+};

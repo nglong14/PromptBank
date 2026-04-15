@@ -16,6 +16,7 @@ import type {
   QualityScore,
   RefineRequest,
   RefineResponse,
+  SuggestTechniqueResponse,
   Technique,
   ValidateSlotsResponse,
 } from "@/lib/types";
@@ -245,6 +246,18 @@ export async function llmScore(
     method: "POST",
     token,
     body: { composedOutput },
+  });
+}
+
+export async function llmSuggestTechnique(
+  token: string,
+  techniqueId: string,
+  assets: Assets,
+): Promise<SuggestTechniqueResponse> {
+  return request<SuggestTechniqueResponse>("/api/v1/llm/suggest-technique", {
+    method: "POST",
+    token,
+    body: { techniqueId, assets },
   });
 }
 

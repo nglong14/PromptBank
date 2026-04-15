@@ -52,6 +52,7 @@ func NewRouter(deps Dependencies) http.Handler {
 
 		r.Post("/llm/normalize", llmNormalizeHandler(deps))
 		r.Post("/llm/suggest-framework", llmSuggestFrameworkHandler(deps))
+		r.Post("/llm/suggest-technique", llmSuggestTechniqueHandler(deps))
 		r.Post("/llm/score", llmScoreHandler(deps))
 		r.Post("/llm/refine", llmRefineHandler(deps))
 	})
