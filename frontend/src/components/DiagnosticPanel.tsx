@@ -20,13 +20,13 @@ export default function DiagnosticPanel({ diagnostics }: Props) {
             key={i}
             style={{
               padding: "0.4rem 0.6rem",
-              borderLeft: `3px solid ${d.severity === "error" ? "var(--danger)" : "#d97706"}`,
-              background: d.severity === "error" ? "#fef2f2" : "#fffbeb",
+              borderLeft: `3px solid ${d.severity === "error" ? "var(--danger)" : "var(--warning)"}`,
+              background: d.severity === "error" ? "var(--danger-bg)" : "var(--warning-bg)",
               borderRadius: "4px",
               fontSize: "0.9rem",
             }}
           >
-            <strong style={{ color: d.severity === "error" ? "var(--danger)" : "#92400e" }}>
+            <strong style={{ color: d.severity === "error" ? "var(--danger)" : "var(--warning)" }}>
               {d.severity === "error" ? "Error" : "Warning"}
             </strong>
             {" — "}

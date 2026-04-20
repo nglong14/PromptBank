@@ -20,8 +20,8 @@ function qualityBadge(quality: FieldQuality | undefined) {
   if (!quality) return null;
   const colors: Record<FieldQuality, string> = {
     empty: "var(--danger)",
-    weak: "#d97706",
-    complete: "#16a34a",
+    weak: "var(--warning)",
+    complete: "var(--success)",
   };
   return (
     <span style={{ color: colors[quality], fontSize: "0.8rem", marginLeft: "0.5rem" }}>

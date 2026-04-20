@@ -52,9 +52,9 @@ const emptyAssets: Assets = {
 };
 
 function qualityColor(score: number): string {
-  if (score >= 8) return "#16a34a";
-  if (score >= 5) return "#d97706";
-  return "#dc2626";
+  if (score >= 8) return "var(--quality-high)";
+  if (score >= 5) return "var(--quality-medium)";
+  return "var(--quality-low)";
 }
 
 type BuildMode = "wizard" | "normalizing" | "editor";

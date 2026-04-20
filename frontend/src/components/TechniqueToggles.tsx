@@ -95,7 +95,7 @@ export default function TechniqueToggles({ techniques, selectedIds, onToggle, as
                   {active && hint && (
                     <div style={{ marginTop: "0.4rem", display: "flex", flexWrap: "wrap", gap: "0.3rem", alignItems: "center" }}>
                       {showHint && (
-                        <span style={{ fontSize: "0.78rem", color: "#d97706" }}>
+                        <span style={{ fontSize: "0.78rem", color: "var(--warning)" }}>
                           {hint.label}
                         </span>
                       )}
