@@ -1,11 +1,10 @@
 "use client";
 
-import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { FormEvent, useState } from "react";
 import ProtectedPage from "@/components/ProtectedPage";
-import { createPrompt, derivePrompt, listPrompts } from "@/lib/api";
+import { createPrompt, derivePrompt } from "@/lib/api";
 import { getToken } from "@/lib/auth";
-import type { Prompt } from "@/lib/types";
 
 function parseCsv(input: string): string[] {
   return input
@@ -15,8 +14,7 @@ function parseCsv(input: string): string[] {
 }
 
 export default function PromptsPage() {
-  const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [loading, setLoading] = useState(true);
+  const router = useRouter();
   const [error, setError] = useState("");
 
   const [title, setTitle] = useState("");
@@ -31,29 +29,6 @@ export default function PromptsPage() {
   const [deriveLoading, setDeriveLoading] = useState(false);
   const [deriveResult, setDeriveResult] = useState("");
 
-  async function loadPrompts() {
-    const token = getToken();
-    if (!token) {
-      return;
-    }
-
-    setLoading(true);
-    setError("");
-    try {
-      const response = await listPrompts(token);
-      setPrompts(response.items);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to load prompts";
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadPrompts();
-  }, []);
-
   async function onCreatePrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const token = getToken();
@@ -64,7 +39,7 @@ export default function PromptsPage() {
     setCreateLoading(true);
     setError("");
     try {
-      await createPrompt(token, {
+      const createdPrompt = await createPrompt(token, {
         title,
         status,
         category,
@@ -74,7 +49,7 @@ export default function PromptsPage() {
       setStatus("draft");
       setCategory("");
       setTagsInput("");
-      await loadPrompts();
+      router.push(`/prompts/${createdPrompt.id}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to create prompt";
       setError(message);
@@ -103,7 +78,6 @@ export default function PromptsPage() {
       setSourcePromptId("");
       setSourceVersionId("");
       setNewTitle("");
-      await loadPrompts();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to derive prompt";
       setError(message);
@@ -116,9 +90,12 @@ export default function PromptsPage() {
     <ProtectedPage>
       <section className="stack">
         <div>
-          <h1 className="page-title">Prompts</h1>
-          <p className="subtitle">Covers list/create endpoints and links to detail/version flows.</p>
+          <h1 className="page-title">Create Prompt</h1>
+          <p className="subtitle">
+            Create a new prompt draft or derive a new prompt from an existing source.
+          </p>
         </div>
+        {error ? <p className="error">{error}</p> : null}
 
         <article className="card">
           <h2>Create Prompt</h2>
@@ -207,39 +184,6 @@ export default function PromptsPage() {
             </button>
           </form>
           {deriveResult ? <p className="success">{deriveResult}</p> : null}
-        </article>
-
-        <article className="card">
-          <div className="row">
-            <h2>Your Prompt List</h2>
-            <button className="btn btn-secondary" type="button" onClick={() => void loadPrompts()}>
-              Refresh
-            </button>
-          </div>
-          <p className="muted">Endpoint: GET /api/v1/prompts</p>
-          {error ? <p className="error">{error}</p> : null}
-          {loading ? (
-            <p>Loading prompts...</p>
-          ) : prompts.length === 0 ? (
-            <p>No prompts yet.</p>
-          ) : (
-            <ul className="list">
-              {prompts.map((prompt) => (
-                <li key={prompt.id} className="card">
-                  <div className="row">
-                    <div>
-                      <strong>{prompt.title}</strong>
-                      <p className="muted">
-                        {prompt.status} | {prompt.category || "uncategorized"}
-                      </p>
-                      <p className="mono">{prompt.id}</p>
-                    </div>
-                    <Link href={`/prompts/${prompt.id}`}>Open</Link>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
         </article>
       </section>
     </ProtectedPage>
