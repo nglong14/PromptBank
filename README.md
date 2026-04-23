@@ -1,83 +1,109 @@
 # PromptBank
 
-Week 1-2 backend foundation is implemented:
-- Go API service with chi router
-- Postgres-backed auth and prompt CRUD/versioning/derive flows
-- JWT auth middleware
-- Docker Compose for local Postgres + Redis + API
-- CI pipeline for format checks and tests
+## Table of contents
+- [Overview](#overview)
+- [Feature](#feature)
+- [Structure](#structure)
+- [Technologies used](#technologies-used)
+- [Installation](#installation)
+- [Contact](#contact)
+- [Room for improvement](#room-for-improvement)
 
-## Quick Start
+## Overview
+PromptBank is a prompt engineering workspace with:
+- A Go backend API for auth, prompt management, versioning, and AI-assisted operations
+- A Next.js frontend for composing prompts and managing prompt assets
+- Gemini-powered helpers for normalization, framework suggestion, scoring, and iterative refinement
 
-1. Start dependencies and API:
+The project focuses on making prompt creation structured, repeatable, and versioned.
 
-```bash
-docker compose up --build
+## Feature
+- User authentication (register/login) with JWT
+- Prompt CRUD and ownership-scoped access control
+- Prompt versioning and derive flow
+- Prompt composition from:
+  - Asset fields (`goal`, `persona`, `context`, `tone`, `constraints`, `examples`)
+  - Selected framework
+  - Selected techniques
+- LLM capabilities:
+  - Wizard answer normalization
+  - Framework suggestion
+  - Prompt quality scoring
+  - Iterative refinement with tool-calling
+  - Technique-specific AI suggestions (few-shot examples, role persona, constraints)
+- Frontend pages for signup/login, prompt list, prompt detail/composition, version browsing
+
+## Structure
+```text
+PromptBank/
+├─ cmd/
+│  ├─ api/                 # API entrypoint
+│  └─ worker/              # Worker scaffold (currently placeholder)
+├─ internal/
+│  ├─ http/                # Router + handlers
+│  ├─ llm/                 # Gemini client + normalize/score/refine/suggestion logic
+│  ├─ repository/          # Postgres repositories
+│  ├─ security/            # JWT and auth helpers
+│  ├─ compose/             # Prompt composing pipeline
+│  ├─ framework/           # Framework definitions and slot mapping
+│  ├─ technique/           # Technique definitions and apply logic
+│  └─ asset/               # Asset models and normalization
+├─ frontend/               # Next.js app
+├─ migrations/             # SQL migrations
+├─ docker-compose.yml      # Local infra: Postgres + Redis + API
+└─ README.md
 ```
 
-2. Check health:
+## Technologies used
+- Backend: Go (Chi router, pgx, JWT)
+- Frontend: Next.js, React, TypeScript
+- Database: PostgreSQL
+- Cache/queue-ready infra: Redis
+- AI integration: Google Gemini (`google/generative-ai-go`)
+- Dev environment: Docker Compose
 
-```bash
-curl http://localhost:8080/health
-```
+## Installation
+### 1) Backend + infrastructure
+1. Copy environment file:
+   ```bash
+   cp .env.example .env
+   ```
+2. Start services:
+   ```bash
+   docker compose up --build
+   ```
+3. Verify API health:
+   ```bash
+   curl http://localhost:8080/health
+   ```
 
-## Environment Variables
+### 2) Frontend
+1. Configure frontend env:
+   ```bash
+   cd frontend
+   cp .env.local.example .env.local
+   ```
+2. Install and run:
+   ```bash
+   npm install
+   npm run dev
+   ```
+3. Open:
+   - [http://localhost:3000](http://localhost:3000)
 
-Copy `.env.example` to `.env` for local non-docker runs.
+Notes:
+- Default frontend API base is `/backend` (rewrite-based proxy to avoid CORS issues)
+- If you change `NEXT_PUBLIC_API_BASE_URL` or `BACKEND_ORIGIN`, restart the frontend server
 
-- `PORT`
-- `DATABASE_URL`
-- `JWT_SECRET`
-- `JWT_EXPIRES_MINUTES`
-- `REDIS_ADDR`
+## Contact
+- Open an issue in this repository for bugs, feature requests, or questions.
 
-## API (Week 1-2)
+## Room for improvement
+- **Async worker pipeline**  
+  `cmd/worker` is currently a scaffold. Move long-running/expensive AI tasks to background jobs (e.g., Redis-backed queue) and let API endpoints return job IDs + status polling/webhooks.
 
-Public:
-- `POST /api/v1/auth/register`
-- `POST /api/v1/auth/login`
-- `GET /health`
-
-Protected (Bearer token):
-- `GET /api/v1/prompts`
-- `POST /api/v1/prompts`
-- `GET /api/v1/prompts/{promptID}`
-- `PATCH /api/v1/prompts/{promptID}`
-- `POST /api/v1/prompts/{promptID}/versions`
-- `GET /api/v1/prompts/{promptID}/versions`
-- `POST /api/v1/prompts/derive`
-
-## Frontend (Next.js)
-
-A simple light-theme frontend has been added in `frontend/` with:
-- Sign up (`POST /api/v1/auth/register`)
-- Login (`POST /api/v1/auth/login`)
-- Health check (`GET /health`)
-- Prompt list/create/detail/update
-- Prompt version create/list
-- Prompt derive
-
-### Run frontend locally
-
-1. Copy env file:
-
-```bash
-cd frontend
-cp .env.local.example .env.local
-```
-
-2. Start dev server:
-
-```bash
-npm install
-npm run dev
-```
-
-3. Open [http://localhost:3000](http://localhost:3000)
-
-By default the frontend uses a Next.js rewrite (`/backend/*`) to avoid browser CORS issues.
-
-- `NEXT_PUBLIC_API_BASE_URL=/backend`
-- Optional `BACKEND_ORIGIN=http://localhost:8080` (or your backend host)
-
-If you change either value, restart the Next.js server.
+- **Prompt lineage UX and deeper lineage features**  
+  Lineage is stored on derive (`prompt_lineage`) but can be expanded with:
+  - lineage graph view in frontend
+  - branch comparison between versions/prompts
+  - clearer ancestry metadata in prompt detail and version cards

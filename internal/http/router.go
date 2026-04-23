@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/nglong14/PromptBank/internal/llm"
 	"github.com/nglong14/PromptBank/internal/repository"
 	"github.com/nglong14/PromptBank/internal/security"
 )
@@ -18,6 +19,8 @@ type Dependencies struct {
 	PromptRepo  *repository.PromptRepository
 	JWTManager  *security.JWTManager
 	TokenPrefix string
+	// LLMClient is optional; LLM endpoints return 503 when nil.
+	LLMClient *llm.Client
 }
 
 func NewRouter(deps Dependencies) http.Handler {
@@ -47,6 +50,12 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Post("/assets/normalize", normalizeAssetsHandler())
 		r.Post("/assets/validate", validateSlotsHandler())
 		r.Post("/compose", composeHandler())
+
+		r.Post("/llm/normalize", llmNormalizeHandler(deps))
+		r.Post("/llm/suggest-framework", llmSuggestFrameworkHandler(deps))
+		r.Post("/llm/suggest-technique", llmSuggestTechniqueHandler(deps))
+		r.Post("/llm/score", llmScoreHandler(deps))
+		r.Post("/llm/refine", llmRefineHandler(deps))
 	})
 
 	return r
