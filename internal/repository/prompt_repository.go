@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nglong14/PromptBank/internal/diff"
 	"github.com/nglong14/PromptBank/internal/models"
 )
 
@@ -144,6 +146,47 @@ func (r *PromptRepository) CreateVersion(ctx context.Context, in CreateVersionIn
 		return nil, fmt.Errorf("insert version: %w", err)
 	}
 
+	// Compute and persist diff_from_parent for v2+. Failure is non-fatal: we log and continue so that a diff bug never blocks version creation.
+	if versionNumber > 1 {
+		var parent models.PromptVersion
+		var parentDiffBytes []byte
+		scanErr := tx.QueryRow(ctx, `
+			SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, diff_from_parent, created_at
+			FROM prompt_versions
+			WHERE prompt_id = $1 AND version_number = $2
+		`, in.PromptID, versionNumber-1).Scan(
+			&parent.ID, &parent.PromptID, &parent.VersionNumber, &parent.Assets, &parent.FrameworkID,
+			&parent.TechniqueIDs, &parent.ComposedOut, &parentDiffBytes, &parent.CreatedAt,
+		)
+		if parentDiffBytes != nil {
+			raw := json.RawMessage(parentDiffBytes)
+			parent.DiffFromParent = &raw
+		}
+		if scanErr != nil {
+			log.Printf("diff: fetch parent version %d for prompt %s: %v", versionNumber-1, in.PromptID, scanErr)
+		} else {
+			diffResult, diffErr := diff.Compute(&parent, &version)
+			if diffErr != nil {
+				log.Printf("diff: compute for prompt %s v%d: %v", in.PromptID, versionNumber, diffErr)
+			} else {
+				diffJSON, marshalErr := json.Marshal(diffResult)
+				if marshalErr != nil {
+					log.Printf("diff: marshal result for prompt %s v%d: %v", in.PromptID, versionNumber, marshalErr)
+				} else {
+					if _, updateErr := tx.Exec(ctx,
+						`UPDATE prompt_versions SET diff_from_parent = $1 WHERE id = $2`,
+						diffJSON, version.ID,
+					); updateErr != nil {
+						log.Printf("diff: update diff_from_parent for prompt %s v%d: %v", in.PromptID, versionNumber, updateErr)
+					} else {
+						raw := json.RawMessage(diffJSON)
+						version.DiffFromParent = &raw
+					}
+				}
+			}
+		}
+	}
+
 	if _, err := tx.Exec(ctx, `UPDATE prompts SET updated_at = NOW() WHERE id = $1`, in.PromptID); err != nil {
 		return nil, fmt.Errorf("touch prompt: %w", err)
 	}
@@ -161,7 +204,7 @@ func (r *PromptRepository) ListVersions(ctx context.Context, promptID, ownerID u
 	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, created_at
+		SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, diff_from_parent, created_at
 		FROM prompt_versions
 		WHERE prompt_id = $1
 		ORDER BY version_number DESC
@@ -174,12 +217,39 @@ func (r *PromptRepository) ListVersions(ctx context.Context, promptID, ownerID u
 	versions := make([]models.PromptVersion, 0)
 	for rows.Next() {
 		var v models.PromptVersion
-		if err := rows.Scan(&v.ID, &v.PromptID, &v.VersionNumber, &v.Assets, &v.FrameworkID, &v.TechniqueIDs, &v.ComposedOut, &v.CreatedAt); err != nil {
+		var diffBytes []byte
+		if err := rows.Scan(&v.ID, &v.PromptID, &v.VersionNumber, &v.Assets, &v.FrameworkID, &v.TechniqueIDs, &v.ComposedOut, &diffBytes, &v.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan version row: %w", err)
+		}
+		if diffBytes != nil {
+			raw := json.RawMessage(diffBytes)
+			v.DiffFromParent = &raw
 		}
 		versions = append(versions, v)
 	}
 	return versions, rows.Err()
+}
+
+// GetVersionByNumber fetches a single prompt version by its sequential number.
+func (r *PromptRepository) GetVersionByNumber(ctx context.Context, promptID uuid.UUID, versionNumber int) (*models.PromptVersion, error) {
+	var v models.PromptVersion
+	var diffBytes []byte
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, diff_from_parent, created_at
+		FROM prompt_versions
+		WHERE prompt_id = $1 AND version_number = $2
+	`, promptID, versionNumber).Scan(
+		&v.ID, &v.PromptID, &v.VersionNumber, &v.Assets, &v.FrameworkID,
+		&v.TechniqueIDs, &v.ComposedOut, &diffBytes, &v.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if diffBytes != nil {
+		raw := json.RawMessage(diffBytes)
+		v.DiffFromParent = &raw
+	}
+	return &v, nil
 }
 
 func (r *PromptRepository) DerivePrompt(ctx context.Context, in DerivePromptInput) (*models.Prompt, *models.PromptVersion, error) {
@@ -200,29 +270,34 @@ func (r *PromptRepository) DerivePrompt(ctx context.Context, in DerivePromptInpu
 	}
 
 	var sourceVersion models.PromptVersion
+	var sourceDiffBytes []byte
 	if in.SourceVersionID != nil {
 		err = tx.QueryRow(ctx, `
-			SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, created_at
+			SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, diff_from_parent, created_at
 			FROM prompt_versions
 			WHERE id = $1 AND prompt_id = $2
 		`, *in.SourceVersionID, in.SourcePromptID).Scan(
 			&sourceVersion.ID, &sourceVersion.PromptID, &sourceVersion.VersionNumber, &sourceVersion.Assets,
-			&sourceVersion.FrameworkID, &sourceVersion.TechniqueIDs, &sourceVersion.ComposedOut, &sourceVersion.CreatedAt,
+			&sourceVersion.FrameworkID, &sourceVersion.TechniqueIDs, &sourceVersion.ComposedOut, &sourceDiffBytes, &sourceVersion.CreatedAt,
 		)
 	} else {
 		err = tx.QueryRow(ctx, `
-			SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, created_at
+			SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, diff_from_parent, created_at
 			FROM prompt_versions
 			WHERE prompt_id = $1
 			ORDER BY version_number DESC
 			LIMIT 1
 		`, in.SourcePromptID).Scan(
 			&sourceVersion.ID, &sourceVersion.PromptID, &sourceVersion.VersionNumber, &sourceVersion.Assets,
-			&sourceVersion.FrameworkID, &sourceVersion.TechniqueIDs, &sourceVersion.ComposedOut, &sourceVersion.CreatedAt,
+			&sourceVersion.FrameworkID, &sourceVersion.TechniqueIDs, &sourceVersion.ComposedOut, &sourceDiffBytes, &sourceVersion.CreatedAt,
 		)
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if sourceDiffBytes != nil {
+		raw := json.RawMessage(sourceDiffBytes)
+		sourceVersion.DiffFromParent = &raw
 	}
 
 	var derivedPrompt models.Prompt
@@ -249,6 +324,7 @@ func (r *PromptRepository) DerivePrompt(ctx context.Context, in DerivePromptInpu
 		&derivedVersion.ID, &derivedVersion.PromptID, &derivedVersion.VersionNumber, &derivedVersion.Assets,
 		&derivedVersion.FrameworkID, &derivedVersion.TechniqueIDs, &derivedVersion.ComposedOut, &derivedVersion.CreatedAt,
 	)
+	// diff_from_parent is intentionally NULL for derived v1 rows.
 	if err != nil {
 		return nil, nil, fmt.Errorf("create derived version: %w", err)
 	}

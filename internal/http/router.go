@@ -39,6 +39,7 @@ func NewRouter(deps Dependencies) http.Handler {
 		r.Patch("/prompts/{promptID}", updatePromptHandler(deps))
 		r.Post("/prompts/{promptID}/versions", createPromptVersionHandler(deps))
 		r.Get("/prompts/{promptID}/versions", listPromptVersionsHandler(deps))
+		r.Get("/prompts/{promptID}/versions/diff", getVersionDiffHandler(deps))
 		r.Post("/prompts/derive", derivePromptHandler(deps))
 
 		r.Get("/frameworks", listFrameworksHandler())

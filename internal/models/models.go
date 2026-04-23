@@ -26,14 +26,15 @@ type Prompt struct {
 }
 
 type PromptVersion struct {
-	ID            uuid.UUID       `json:"id"`
-	PromptID      uuid.UUID       `json:"promptId"`
-	VersionNumber int             `json:"versionNumber"`
-	Assets        json.RawMessage `json:"assets"`
-	FrameworkID   string          `json:"frameworkId"`
-	TechniqueIDs  []string        `json:"techniqueIds"`
-	ComposedOut   string          `json:"composedOutput"`
-	CreatedAt     time.Time       `json:"createdAt"`
+	ID             uuid.UUID        `json:"id"`
+	PromptID       uuid.UUID        `json:"promptId"`
+	VersionNumber  int              `json:"versionNumber"`
+	Assets         json.RawMessage  `json:"assets"`
+	FrameworkID    string           `json:"frameworkId"`
+	TechniqueIDs   []string         `json:"techniqueIds"`
+	ComposedOut    string           `json:"composedOutput"`
+	DiffFromParent *json.RawMessage `json:"diffFromParent,omitempty"`
+	CreatedAt      time.Time        `json:"createdAt"`
 }
 
 type PromptLineage struct {

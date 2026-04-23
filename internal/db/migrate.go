@@ -49,6 +49,12 @@ CREATE TABLE IF NOT EXISTS prompt_lineage (
     UNIQUE(prompt_id)
 );
 
+ALTER TABLE prompt_versions
+  ADD COLUMN IF NOT EXISTS diff_from_parent JSONB;
+
+CREATE INDEX IF NOT EXISTS idx_versions_diff_gin
+  ON prompt_versions USING GIN (diff_from_parent);
+
 CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at = NOW();
