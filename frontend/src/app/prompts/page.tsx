@@ -90,16 +90,14 @@ export default function PromptsPage() {
     <ProtectedPage>
       <section className="stack">
         <div>
-          <h1 className="page-title">Create Prompt</h1>
+          <h1 className="page-title">New Prompt</h1>
           <p className="subtitle">
-            Create a new prompt draft or derive a new prompt from an existing source.
+            Set up a prompt&apos;s metadata first. You&apos;ll build and save its versions on the next screen.
           </p>
         </div>
         {error ? <p className="error">{error}</p> : null}
 
         <article className="card">
-          <h2>Create Prompt</h2>
-          <p className="muted">Endpoint: POST /api/v1/prompts</p>
           <form onSubmit={onCreatePrompt}>
             <label className="field">
               Title
@@ -147,8 +145,10 @@ export default function PromptsPage() {
         </article>
 
         <article className="card">
-          <h2>Derive Prompt</h2>
-          <p className="muted">Endpoint: POST /api/v1/prompts/derive</p>
+          <h2>Fork from existing prompt</h2>
+          <p className="muted">
+            Create a new prompt by copying another prompt&apos;s latest version or a specific saved version.
+          </p>
           <form onSubmit={onDerivePrompt}>
             <label className="field">
               Source Prompt ID

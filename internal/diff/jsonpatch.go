@@ -151,7 +151,6 @@ func policyFor(path string) arrayPolicy {
 	return policyOrdered
 }
 
-
 func walk(path string, a, b any, changes *[]Change, stats *Stats) {
 	a, b = coerceNilContainers(a, b)
 
