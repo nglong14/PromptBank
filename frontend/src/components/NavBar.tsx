@@ -32,7 +32,7 @@ export default function NavBar() {
           <Link href="/">Home</Link>
           {isAuthenticated ? (
             <>
-              <Link href="/prompts">Create Prompt</Link>
+              <Link href="/prompts">New Prompt</Link>
               <Link href="/bank">Bank</Link>
               <button type="button" className="btn btn-secondary" onClick={onLogout}>
                 Logout

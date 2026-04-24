@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import ProtectedPage from "@/components/ProtectedPage";
 import AssetEditor from "@/components/AssetEditor";
@@ -59,6 +59,60 @@ function qualityColor(score: number): string {
 
 type BuildMode = "wizard" | "normalizing" | "editor";
 
+type AssetTextKey = keyof Omit<Assets, "examples">;
+
+const assetSections: Array<{ key: AssetTextKey; label: string }> = [
+  { key: "persona", label: "Persona" },
+  { key: "context", label: "Context" },
+  { key: "tone", label: "Tone" },
+  { key: "constraints", label: "Constraints" },
+  { key: "goal", label: "Goal" },
+];
+
+function formatRelativeTime(value: string): string {
+  const diffMs = new Date(value).getTime() - Date.now();
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const ranges: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ["year", 1000 * 60 * 60 * 24 * 365],
+    ["month", 1000 * 60 * 60 * 24 * 30],
+    ["day", 1000 * 60 * 60 * 24],
+    ["hour", 1000 * 60 * 60],
+    ["minute", 1000 * 60],
+  ];
+
+  for (const [unit, ms] of ranges) {
+    if (Math.abs(diffMs) >= ms || unit === "minute") {
+      return formatter.format(Math.round(diffMs / ms), unit);
+    }
+  }
+
+  return "just now";
+}
+
+function readString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function parseAssets(value: unknown): Assets {
+  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const rawExamples = Array.isArray(source.examples) ? source.examples : [];
+
+  return {
+    persona: readString(source.persona),
+    context: readString(source.context),
+    tone: readString(source.tone),
+    constraints: readString(source.constraints),
+    goal: readString(source.goal),
+    examples: rawExamples.map((example) => {
+      const item = example && typeof example === "object" ? (example as Record<string, unknown>) : {};
+      return {
+        input: readString(item.input),
+        output: readString(item.output),
+      };
+    }),
+  };
+}
+
 export default function PromptDetailPage() {
   const params = useParams<{ id: string }>();
   const promptId = params.id;
@@ -90,6 +144,9 @@ export default function PromptDetailPage() {
   // Wizard state
   const [buildMode, setBuildMode] = useState<BuildMode>("wizard");
   const [wizardError, setWizardError] = useState("");
+  const [metadataEditing, setMetadataEditing] = useState(false);
+  const [selectedVersionIdx, setSelectedVersionIdx] = useState(0);
+  const [authoringOpen, setAuthoringOpen] = useState(false);
 
   // Quality scoring state
   const [qualityScore, setQualityScore] = useState<QualityScore | null>(null);
@@ -118,7 +175,9 @@ export default function PromptDetailPage() {
       ]);
 
       setPrompt(promptRes);
-      setVersions(versionsRes.items);
+      const nextVersions = [...versionsRes.items];
+      setVersions(nextVersions);
+      setSelectedVersionIdx(0);
       setTitle(promptRes.title);
       setStatus(promptRes.status);
       setCategory(promptRes.category);
@@ -137,6 +196,16 @@ export default function PromptDetailPage() {
     void loadAll();
   }, [loadAll]);
 
+  const selectedVersion = useMemo(
+    () => versions[selectedVersionIdx] ?? versions[0] ?? null,
+    [selectedVersionIdx, versions],
+  );
+
+  const selectedAssets = useMemo(
+    () => parseAssets(selectedVersion?.assets),
+    [selectedVersion],
+  );
+
   async function onWizardComplete(answers: Record<string, string>) {
     const token = getToken();
     if (!token) return;
@@ -150,6 +219,7 @@ export default function PromptDetailPage() {
       if (res.suggestedFrameworkId) {
         setFrameworkId(res.suggestedFrameworkId);
       }
+      setAuthoringOpen(true);
       setBuildMode("editor");
     } catch (err) {
       setWizardError(err instanceof Error ? err.message : "Failed to interpret your answers. Please try again.");
@@ -175,6 +245,7 @@ export default function PromptDetailPage() {
     setTechniqueIds([]);
     setWizardError("");
     resetCompose();
+    setAuthoringOpen(true);
     setBuildMode("wizard");
   }
 
@@ -263,10 +334,10 @@ export default function PromptDetailPage() {
     }
   }
 
-  async function onCopy() {
-    if (!composeResult) return;
+  async function onCopy(text: string) {
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(composeResult.composedOutput);
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -293,6 +364,7 @@ export default function PromptDetailPage() {
       setFrameworkId("");
       setTechniqueIds([]);
       resetCompose();
+      setAuthoringOpen(false);
       setBuildMode("wizard");
       await loadAll();
     } catch (err) {
@@ -316,6 +388,7 @@ export default function PromptDetailPage() {
         tags: parseCsv(tagsInput),
       });
       setPrompt(updated);
+      setMetadataEditing(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update prompt");
     } finally {
@@ -327,8 +400,10 @@ export default function PromptDetailPage() {
     <ProtectedPage>
       <section className="stack">
         <div>
-          <h1 className="page-title">Prompt Detail</h1>
-          <p className="subtitle mono">{promptId}</p>
+          <h1 className="page-title">{prompt?.title || "Prompt"}</h1>
+          <p className="subtitle">
+            {prompt ? `Updated ${formatRelativeTime(prompt.updatedAt)}` : "Loading prompt details..."}
+          </p>
         </div>
 
         {error ? <p className="error">{error}</p> : null}
@@ -337,41 +412,219 @@ export default function PromptDetailPage() {
         ) : (
           <>
             <article className="card">
-              <h2>Prompt Metadata</h2>
               {prompt ? (
-                <p className="muted">
-                  Created {new Date(prompt.createdAt).toLocaleString()} | Updated{" "}
-                  {new Date(prompt.updatedAt).toLocaleString()}
-                </p>
+                <div className="metadata-grid">
+                  <div className="metadata-summary">
+                    <div className="row" style={{ justifyContent: "flex-start", flexWrap: "wrap" }}>
+                      <span className="status-badge">{prompt.status}</span>
+                      <span className="tag-pill tag-pill-muted">
+                        {prompt.category || "uncategorized"}
+                      </span>
+                      <span className="muted">
+                        Created {new Date(prompt.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="metadata-tags">
+                      {prompt.tags.length > 0 ? (
+                        prompt.tags.map((tag) => (
+                          <span key={tag} className="tag-pill tag-pill-muted">
+                            {tag}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="muted">No tags yet</span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={() => setMetadataEditing((value) => !value)}
+                  >
+                    {metadataEditing ? "Hide metadata editor" : "Edit metadata"}
+                  </button>
+                </div>
               ) : null}
-              <form onSubmit={onUpdatePrompt}>
-                <label className="field">
-                  Title
-                  <input className="input" required value={title} onChange={(e) => setTitle(e.target.value)} />
-                </label>
-                <label className="field">
-                  Status
-                  <input className="input" value={status} onChange={(e) => setStatus(e.target.value)} />
-                </label>
-                <label className="field">
-                  Category
-                  <input className="input" value={category} onChange={(e) => setCategory(e.target.value)} />
-                </label>
-                <label className="field">
-                  Tags (comma separated)
-                  <input className="input" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} />
-                </label>
-                <button className="btn btn-primary" type="submit" disabled={updateLoading}>
-                  {updateLoading ? "Saving..." : "Update prompt"}
-                </button>
-              </form>
+
+              {metadataEditing ? (
+                <form onSubmit={onUpdatePrompt} style={{ marginTop: "1rem" }}>
+                  <label className="field">
+                    Title
+                    <input className="input" required value={title} onChange={(e) => setTitle(e.target.value)} />
+                  </label>
+                  <label className="field">
+                    Status
+                    <input className="input" value={status} onChange={(e) => setStatus(e.target.value)} />
+                  </label>
+                  <label className="field">
+                    Category
+                    <input className="input" value={category} onChange={(e) => setCategory(e.target.value)} />
+                  </label>
+                  <label className="field">
+                    Tags (comma separated)
+                    <input className="input" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} />
+                  </label>
+                  <div className="row" style={{ justifyContent: "flex-start" }}>
+                    <button className="btn btn-primary" type="submit" disabled={updateLoading}>
+                      {updateLoading ? "Saving..." : "Update prompt"}
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      onClick={() => setMetadataEditing(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : null}
             </article>
 
-            <div className="two-col">
-              <article className="card">
-                <div className="row" style={{ marginBottom: "0.8rem" }}>
+            <article className="card">
+              <div className="row" style={{ alignItems: "flex-start" }}>
+                <div>
+                  <h2 style={{ margin: 0 }}>Current Version</h2>
+                  <p className="muted" style={{ margin: "0.25rem 0 0" }}>
+                    {selectedVersion
+                      ? "The selected saved version of this prompt."
+                      : "No versions yet. Create the first one below."}
+                  </p>
+                </div>
+                {selectedVersion ? (
+                  <span className="muted">{formatRelativeTime(selectedVersion.createdAt)}</span>
+                ) : null}
+              </div>
+
+              {selectedVersion ? (
+                <div className="current-version-layout" style={{ marginTop: "1rem" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                    <span className="status-badge">v{selectedVersion.versionNumber}</span>
+                    <span className="tag-pill">
+                      {selectedVersion.frameworkId || "no framework"}
+                    </span>
+                    {selectedVersion.techniqueIds.length > 0 ? (
+                      selectedVersion.techniqueIds.map((techniqueId) => (
+                        <span key={techniqueId} className="tag-pill tag-pill-muted">
+                          {techniqueId}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="muted">No techniques selected</span>
+                    )}
+                  </div>
+
+                  <div className="row">
+                    <h3 style={{ margin: 0 }}>Composed Output</h3>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ fontSize: "0.8rem" }}
+                      onClick={() => void onCopy(selectedVersion.composedOutput)}
+                    >
+                      {copied ? "Copied!" : "Copy"}
+                    </button>
+                  </div>
+
+                  {selectedVersion.composedOutput ? (
+                    <pre className="composed-output mono">{selectedVersion.composedOutput}</pre>
+                  ) : (
+                    <p className="muted">This version does not have composed output yet.</p>
+                  )}
+
+                  <details>
+                    <summary style={{ cursor: "pointer" }}>View assets</summary>
+                    <dl className="asset-readout" style={{ marginTop: "0.9rem" }}>
+                      {assetSections.map(({ key, label }) => (
+                        <div key={key} className="asset-readout-section">
+                          <dt>{label}</dt>
+                          <dd>{selectedAssets[key] || <span className="muted">Empty</span>}</dd>
+                        </div>
+                      ))}
+                      <div className="asset-readout-section">
+                        <dt>Examples</dt>
+                        <dd>
+                          {selectedAssets.examples.length > 0 ? (
+                            <div className="stack" style={{ gap: "0.6rem" }}>
+                              {selectedAssets.examples.map((example, index) => (
+                                <div key={`${example.input}-${index}`} className="card version-card">
+                                  <strong>Example {index + 1}</strong>
+                                  <p style={{ margin: "0.4rem 0 0" }}>
+                                    <span className="muted">Input:</span> {example.input || "Empty"}
+                                  </p>
+                                  <p style={{ margin: "0.25rem 0 0" }}>
+                                    <span className="muted">Output:</span> {example.output || "Empty"}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="muted">No examples</span>
+                          )}
+                        </dd>
+                      </div>
+                    </dl>
+                  </details>
+                </div>
+              ) : (
+                <p className="muted" style={{ marginTop: "1rem" }}>
+                  Save a version to see the composed output, framework, techniques, and assets here.
+                </p>
+              )}
+            </article>
+
+            <article className="card">
+              <div className="row">
+                <div>
+                  <h2 style={{ margin: 0 }}>Version History</h2>
+                  <p className="muted" style={{ margin: "0.25rem 0 0" }}>
+                    Select a version to inspect its saved output and assets.
+                  </p>
+                </div>
+                <button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>
+                  Refresh
+                </button>
+              </div>
+
+              {versions.length === 0 ? (
+                <p className="muted" style={{ marginTop: "1rem" }}>No versions yet.</p>
+              ) : (
+                <div className="version-strip" style={{ marginTop: "1rem" }}>
+                  {versions.map((version, index) => (
+                    <button
+                      key={version.id}
+                      type="button"
+                      className={`version-pill${index === selectedVersionIdx ? " version-pill-active" : ""}`}
+                      onClick={() => setSelectedVersionIdx(index)}
+                    >
+                      v{version.versionNumber}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            <article className="card">
+              <div className="row" style={{ marginBottom: authoringOpen ? "0.8rem" : 0 }}>
+                <div>
+                  <h2 style={{ margin: 0 }}>Create New Version</h2>
+                  <p className="muted" style={{ margin: "0.25rem 0 0" }}>
+                    Build and save the next version without losing the current one.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setAuthoringOpen((value) => !value)}
+                >
+                  {authoringOpen ? "Hide authoring" : versions.length === 0 ? "Create first version" : "Create new version"}
+                </button>
+              </div>
+
+              {authoringOpen ? (
+                <>
+                  <div className="row" style={{ marginBottom: "0.8rem" }}>
                   <div>
-                    <h2 style={{ margin: 0 }}>Compose New Version</h2>
+                    <h3 style={{ margin: 0 }}>Compose New Version</h3>
                     <p className="muted" style={{ margin: "0.2rem 0 0", fontSize: "0.9rem" }}>
                       {buildMode === "editor"
                         ? "Review and edit your prompt assets, then compose."
@@ -388,262 +641,210 @@ export default function PromptDetailPage() {
                       Start over with questions
                     </button>
                   ) : null}
-                </div>
+                  </div>
 
-                {buildMode === "normalizing" ? (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: "0.6rem",
-                      padding: "2.5rem 1rem",
-                      color: "var(--muted)",
-                    }}
-                  >
+                  {buildMode === "normalizing" ? (
                     <div
                       style={{
-                        width: "28px",
-                        height: "28px",
-                        border: "3px solid var(--border)",
-                        borderTopColor: "var(--primary)",
-                        borderRadius: "50%",
-                        animation: "spin 0.8s linear infinite",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: "0.6rem",
+                        padding: "2.5rem 1rem",
+                        color: "var(--muted)",
                       }}
+                    >
+                      <div
+                        style={{
+                          width: "28px",
+                          height: "28px",
+                          border: "3px solid var(--border)",
+                          borderTopColor: "var(--primary)",
+                          borderRadius: "50%",
+                          animation: "spin 0.8s linear infinite",
+                        }}
+                      />
+                      <p style={{ margin: 0 }}>Interpreting your answers with AI...</p>
+                      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                    </div>
+                  ) : buildMode === "wizard" ? (
+                    <QuestionWizard
+                      onComplete={(answers) => void onWizardComplete(answers)}
+                      onCancel={() => setBuildMode("editor")}
+                      error={wizardError}
                     />
-                    <p style={{ margin: 0 }}>Interpreting your answers with AI...</p>
-                    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-                  </div>
-                ) : buildMode === "wizard" ? (
-                  <QuestionWizard
-                    onComplete={(answers) => void onWizardComplete(answers)}
-                    onCancel={() => setBuildMode("editor")}
-                    error={wizardError}
-                  />
-                ) : (
-                  <form onSubmit={onCompose}>
-                    {wizardError && (
-                      <p className="error" style={{ marginBottom: "0.6rem" }}>
-                        {wizardError}
-                      </p>
-                    )}
+                  ) : (
+                    <form onSubmit={onCompose}>
+                      {wizardError && (
+                        <p className="error" style={{ marginBottom: "0.6rem" }}>
+                          {wizardError}
+                        </p>
+                      )}
 
-                    <AssetEditor assets={assets} fieldReport={fieldReport} onChange={setAssets} />
+                      <AssetEditor assets={assets} fieldReport={fieldReport} onChange={setAssets} />
 
-                    <div style={{ margin: "0.6rem 0" }}>
-                      <button type="button" className="btn btn-secondary" onClick={() => void onNormalize()}>
-                        Normalize &amp; check fields
-                      </button>
-                    </div>
-
-                    <FrameworkSelector frameworks={frameworks} selectedId={frameworkId} onSelect={setFrameworkId} />
-                    <TechniqueToggles techniques={techniques} selectedIds={techniqueIds} onToggle={setTechniqueIds} assets={assets} onAssetsChange={setAssets} />
-
-                    <div style={{ marginTop: "0.8rem" }}>
-                      <button className="btn btn-primary" type="submit" disabled={composeLoading || !frameworkId}>
-                        {composeLoading ? "Composing..." : "Compose prompt"}
-                      </button>
-                    </div>
-
-                    {diagnostics.length > 0 ? (
-                      <div style={{ marginTop: "0.8rem" }}>
-                        <DiagnosticPanel diagnostics={diagnostics} />
+                      <div style={{ margin: "0.6rem 0" }}>
+                        <button type="button" className="btn btn-secondary" onClick={() => void onNormalize()}>
+                          Normalize &amp; check fields
+                        </button>
                       </div>
-                    ) : null}
 
-                    {composeResult ? (
+                      <FrameworkSelector frameworks={frameworks} selectedId={frameworkId} onSelect={setFrameworkId} />
+                      <TechniqueToggles techniques={techniques} selectedIds={techniqueIds} onToggle={setTechniqueIds} assets={assets} onAssetsChange={setAssets} />
+
                       <div style={{ marginTop: "0.8rem" }}>
-                        <div className="row" style={{ marginBottom: "0.4rem" }}>
-                          <h3 style={{ margin: 0 }}>Composed Output</h3>
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                            {qualityLoading ? (
-                              <span className="muted" style={{ fontSize: "0.85rem" }}>
-                                Scoring...
-                              </span>
-                            ) : qualityScore ? (
-                              <span
-                                className="quality-badge"
-                                style={{
-                                  background: qualityColor(qualityScore.score),
-                                }}
-                              >
-                                {qualityScore.score}/10
-                              </span>
-                            ) : null}
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              style={{ fontSize: "0.78rem", padding: "0.2rem 0.55rem" }}
-                              onClick={() => void onCopy()}
-                            >
-                              {copied ? "Copied!" : "Copy"}
-                            </button>
-                          </div>
+                        <button className="btn btn-primary" type="submit" disabled={composeLoading || !frameworkId}>
+                          {composeLoading ? "Composing..." : "Compose prompt"}
+                        </button>
+                      </div>
+
+                      {diagnostics.length > 0 ? (
+                        <div style={{ marginTop: "0.8rem" }}>
+                          <DiagnosticPanel diagnostics={diagnostics} />
                         </div>
+                      ) : null}
 
-                        {qualityScore?.feedback && (
-                          <p className="muted" style={{ fontSize: "0.85rem", margin: "0 0 0.6rem" }}>
-                            {qualityScore.feedback}
-                          </p>
-                        )}
-
-                        <pre className="composed-output mono">
-                          {composeResult.composedOutput}
-                        </pre>
-
-                        {/* Refine with AI panel */}
-                        <div className="card" style={{ marginTop: "0.8rem" }}>
-                          <h3 style={{ margin: "0 0 0.3rem" }}>Refine with AI</h3>
-                          <p className="muted" style={{ margin: "0 0 0.8rem", fontSize: "0.9rem" }}>
-                            Describe what you&#39;d like to change. The AI will update the prompt and re-compose it for you.
-                          </p>
-
-                          {refineHistory.length > 0 && (
-                            <div
-                              style={{
-                                borderTop: "1px solid var(--border)",
-                                paddingTop: "0.6rem",
-                                marginBottom: "0.8rem",
-                                display: "grid",
-                                gap: "0.5rem",
-                              }}
-                            >
-                              {refineHistory.map((msg, i) => (
-                                <div
-                                  key={i}
-                                  className="refine-msg"
+                      {composeResult ? (
+                        <div style={{ marginTop: "0.8rem" }}>
+                          <div className="row" style={{ marginBottom: "0.4rem" }}>
+                            <h3 style={{ margin: 0 }}>Composed Output</h3>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                              {qualityLoading ? (
+                                <span className="muted" style={{ fontSize: "0.85rem" }}>
+                                  Scoring...
+                                </span>
+                              ) : qualityScore ? (
+                                <span
+                                  className="quality-badge"
+                                  style={{
+                                    background: qualityColor(qualityScore.score),
+                                  }}
                                 >
-                                  <span
-                                    className={msg.role === "user" ? "refine-role refine-role-user" : "refine-role refine-role-agent"}
-                                  >
-                                    {msg.role === "user" ? "You" : "AI"}
-                                  </span>
-                                  <span style={{ fontSize: "0.9rem" }}>{msg.content}</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {refineError && (
-                            <p className="error" style={{ marginBottom: "0.5rem" }}>
-                              {refineError}
-                            </p>
-                          )}
-
-                          <textarea
-                            className="textarea"
-                            rows={2}
-                            placeholder='e.g. "Make it sound less formal" or "Add more constraints about response length"'
-                            value={refineFeedback}
-                            onChange={(e) => setRefineFeedback(e.target.value)}
-                            disabled={refineLoading}
-                          />
-                          <button
-                            type="button"
-                            className="btn btn-primary"
-                            style={{ marginTop: "0.5rem" }}
-                            onClick={() => void onRefine()}
-                            disabled={refineLoading || !refineFeedback.trim()}
-                          >
-                            {refineLoading ? "Refining..." : "Refine prompt"}
-                          </button>
-                        </div>
-
-                        {showSavePrompt ? (
-                          <div className="save-prompt-bar">
-                            <span style={{ fontWeight: 500, fontSize: "0.9rem" }}>
-                              Refinement applied. Save as new version?
-                            </span>
-                            <div style={{ display: "flex", gap: "0.4rem" }}>
-                              <button
-                                type="button"
-                                className="btn btn-primary"
-                                style={{ fontSize: "0.85rem", padding: "0.3rem 0.7rem" }}
-                                disabled={saveVersionLoading}
-                                onClick={() => void onSaveVersion()}
-                              >
-                                {saveVersionLoading ? "Saving..." : "Save version"}
-                              </button>
+                                  {qualityScore.score}/10
+                                </span>
+                              ) : null}
                               <button
                                 type="button"
                                 className="btn btn-secondary"
-                                style={{ fontSize: "0.85rem", padding: "0.3rem 0.7rem" }}
-                                onClick={() => setShowSavePrompt(false)}
+                                style={{ fontSize: "0.78rem", padding: "0.2rem 0.55rem" }}
+                                onClick={() => void onCopy(composeResult.composedOutput)}
                               >
-                                Keep editing
+                                {copied ? "Copied!" : "Copy"}
                               </button>
                             </div>
                           </div>
-                        ) : (
-                          <button
-                            type="button"
-                            className="btn btn-primary"
-                            style={{ marginTop: "0.8rem" }}
-                            disabled={saveVersionLoading}
-                            onClick={() => void onSaveVersion()}
-                          >
-                            {saveVersionLoading ? "Saving version..." : "Save as new version"}
-                          </button>
-                        )}
-                      </div>
-                    ) : null}
-                  </form>
-                )}
-              </article>
 
-              <article className="card versions-panel">
-                <div className="row">
-                  <h2>Versions</h2>
-                  <button className="btn btn-secondary" type="button" onClick={() => void loadAll()}>
-                    Refresh
-                  </button>
-                </div>
-                {versions.length === 0 ? (
-                  <p className="muted">No versions yet.</p>
-                ) : (
-                  <ul className="list">
-                    {versions.map((version) => (
-                      <li key={version.id} className="card version-card">
-                        <div className="row" style={{ marginBottom: "0.3rem" }}>
-                          <strong style={{ fontSize: "1rem" }}>v{version.versionNumber}</strong>
-                          <span className="muted" style={{ fontSize: "0.78rem" }}>
-                            {new Date(version.createdAt).toLocaleDateString()}
-                          </span>
-                        </div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginBottom: "0.4rem" }}>
-                          {version.frameworkId && (
-                            <span className="tag-pill">{version.frameworkId}</span>
+                          {qualityScore?.feedback && (
+                            <p className="muted" style={{ fontSize: "0.85rem", margin: "0 0 0.6rem" }}>
+                              {qualityScore.feedback}
+                            </p>
                           )}
-                          {version.techniqueIds?.map((tid) => (
-                            <span key={tid} className="tag-pill tag-pill-muted">{tid}</span>
-                          ))}
+
+                          <pre className="composed-output mono">
+                            {composeResult.composedOutput}
+                          </pre>
+
+                          {/* Refine with AI panel */}
+                          <div className="card" style={{ marginTop: "0.8rem" }}>
+                            <h3 style={{ margin: "0 0 0.3rem" }}>Refine with AI</h3>
+                            <p className="muted" style={{ margin: "0 0 0.8rem", fontSize: "0.9rem" }}>
+                              Describe what you&#39;d like to change. The AI will update the prompt and re-compose it for you.
+                            </p>
+
+                            {refineHistory.length > 0 && (
+                              <div
+                                style={{
+                                  borderTop: "1px solid var(--border)",
+                                  paddingTop: "0.6rem",
+                                  marginBottom: "0.8rem",
+                                  display: "grid",
+                                  gap: "0.5rem",
+                                }}
+                              >
+                                {refineHistory.map((msg, i) => (
+                                  <div
+                                    key={i}
+                                    className="refine-msg"
+                                  >
+                                    <span
+                                      className={msg.role === "user" ? "refine-role refine-role-user" : "refine-role refine-role-agent"}
+                                    >
+                                      {msg.role === "user" ? "You" : "AI"}
+                                    </span>
+                                    <span style={{ fontSize: "0.9rem" }}>{msg.content}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {refineError && (
+                              <p className="error" style={{ marginBottom: "0.5rem" }}>
+                                {refineError}
+                              </p>
+                            )}
+
+                            <textarea
+                              className="textarea"
+                              rows={2}
+                              placeholder='e.g. "Make it sound less formal" or "Add more constraints about response length"'
+                              value={refineFeedback}
+                              onChange={(e) => setRefineFeedback(e.target.value)}
+                              disabled={refineLoading}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              style={{ marginTop: "0.5rem" }}
+                              onClick={() => void onRefine()}
+                              disabled={refineLoading || !refineFeedback.trim()}
+                            >
+                              {refineLoading ? "Refining..." : "Refine prompt"}
+                            </button>
+                          </div>
+
+                          {showSavePrompt ? (
+                            <div className="save-prompt-bar">
+                              <span style={{ fontWeight: 500, fontSize: "0.9rem" }}>
+                                Refinement applied. Save as new version?
+                              </span>
+                              <div style={{ display: "flex", gap: "0.4rem" }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-primary"
+                                  style={{ fontSize: "0.85rem", padding: "0.3rem 0.7rem" }}
+                                  disabled={saveVersionLoading}
+                                  onClick={() => void onSaveVersion()}
+                                >
+                                  {saveVersionLoading ? "Saving..." : "Save version"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary"
+                                  style={{ fontSize: "0.85rem", padding: "0.3rem 0.7rem" }}
+                                  onClick={() => setShowSavePrompt(false)}
+                                >
+                                  Keep editing
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              style={{ marginTop: "0.8rem" }}
+                              disabled={saveVersionLoading}
+                              onClick={() => void onSaveVersion()}
+                            >
+                              {saveVersionLoading ? "Saving version..." : "Save as new version"}
+                            </button>
+                          )}
                         </div>
-                        {version.composedOutput ? (
-                          <details>
-                            <summary className="muted" style={{ cursor: "pointer", fontSize: "0.85rem" }}>
-                              Show composed output
-                            </summary>
-                            <pre className="composed-output mono" style={{ marginTop: "0.3rem", maxHeight: "200px" }}>
-                              {version.composedOutput}
-                            </pre>
-                          </details>
-                        ) : (
-                          <p className="muted" style={{ fontSize: "0.85rem", margin: 0 }}>No composed output</p>
-                        )}
-                        <details style={{ marginTop: "0.3rem" }}>
-                          <summary className="muted" style={{ cursor: "pointer", fontSize: "0.78rem" }}>
-                            ID
-                          </summary>
-                          <p className="mono" style={{ fontSize: "0.75rem", margin: "0.2rem 0 0", color: "var(--muted)" }}>
-                            {version.id}
-                          </p>
-                        </details>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </article>
-            </div>
+                      ) : null}
+                    </form>
+                  )}
+                </>
+              ) : null}
+            </article>
           </>
         )}
       </section>

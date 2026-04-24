@@ -472,8 +472,8 @@ func TestRoundTrip_AddAllFields(t *testing.T) {
 func TestRoundTrip_RemoveAllFields(t *testing.T) {
 	from := makeDoc(
 		asset.Assets{
-			Persona: "p",
-			Context: "c",
+			Persona:  "p",
+			Context:  "c",
 			Examples: []asset.Example{{Input: "i", Output: "o"}},
 		},
 		"raci",
