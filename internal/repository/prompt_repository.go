@@ -30,11 +30,49 @@ type CreatePromptInput struct {
 }
 
 type CreateVersionInput struct {
-	PromptID     uuid.UUID
-	Assets       json.RawMessage
-	FrameworkID  string
-	TechniqueIDs []string
-	ComposedOut  string
+	PromptID        uuid.UUID
+	Assets          json.RawMessage
+	FrameworkID     string
+	TechniqueIDs    []string
+	ComposedOut     string
+	CreatedBy       uuid.UUID
+	ChangeType      string
+	ChangeSummary   *string
+	ParentVersionID *uuid.UUID
+}
+
+// allowedChangeTypes mirrors the CHECK constraint on prompt_versions.change_type.
+// The repo enforces it as defense-in-depth alongside the DB; callers that pass an
+// unknown value get a clean Go error instead of a constraint violation.
+var allowedChangeTypes = map[string]struct{}{
+	"manual_edit": {},
+	"llm_refine":  {},
+	"fork":        {},
+	"bulk_update": {},
+}
+
+// versionColumns lists the prompt_versions columns returned by every read path. Kept
+// as a single constant so SELECT, INSERT RETURNING, and Scan ordering can never drift.
+const versionColumns = `id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output,
+	diff_from_parent, created_by, change_type, change_summary, parent_version_id, created_at`
+
+// scanVersion reads a row produced by a SELECT/RETURNING that uses versionColumns into v.
+// row must be a pgx.Row (e.g. tx.QueryRow(...)) or a pgx.Rows positioned at a row.
+func scanVersion(row pgx.Row, v *models.PromptVersion) error {
+	var diffBytes []byte
+	if err := row.Scan(
+		&v.ID, &v.PromptID, &v.VersionNumber, &v.Assets, &v.FrameworkID,
+		&v.TechniqueIDs, &v.ComposedOut, &diffBytes,
+		&v.CreatedBy, &v.ChangeType, &v.ChangeSummary, &v.ParentVersionID,
+		&v.CreatedAt,
+	); err != nil {
+		return err
+	}
+	if diffBytes != nil {
+		raw := json.RawMessage(diffBytes)
+		v.DiffFromParent = &raw
+	}
+	return nil
 }
 
 type DerivePromptInput struct {
@@ -117,6 +155,13 @@ func (r *PromptRepository) Update(ctx context.Context, promptID, ownerID uuid.UU
 }
 
 func (r *PromptRepository) CreateVersion(ctx context.Context, in CreateVersionInput) (*models.PromptVersion, error) {
+	if in.ChangeType == "" {
+		in.ChangeType = "manual_edit"
+	}
+	if _, ok := allowedChangeTypes[in.ChangeType]; !ok {
+		return nil, fmt.Errorf("invalid change_type %q", in.ChangeType)
+	}
+
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -133,37 +178,55 @@ func (r *PromptRepository) CreateVersion(ctx context.Context, in CreateVersionIn
 		return nil, fmt.Errorf("get version number: %w", err)
 	}
 
+	// Resolve canonical parent: caller-supplied override wins; otherwise the latest
+	// existing version of this prompt becomes the parent. v1 of a brand-new prompt has
+	// no parent (the column stays NULL and no diff is computed).
+	parentVersionID := in.ParentVersionID
+	if parentVersionID == nil && versionNumber > 1 {
+		var pid uuid.UUID
+		if err := tx.QueryRow(ctx, `
+			SELECT id FROM prompt_versions
+			WHERE prompt_id = $1
+			ORDER BY version_number DESC
+			LIMIT 1
+		`, in.PromptID).Scan(&pid); err != nil {
+			return nil, fmt.Errorf("resolve parent version: %w", err)
+		}
+		parentVersionID = &pid
+	}
+
+	// Convert uuid.Nil to a real NULL on the wire. pgx writes a non-pointer uuid.Nil
+	// as the zero UUID literal, which would violate the FK to users(id).
+	var createdByParam *uuid.UUID
+	if in.CreatedBy != uuid.Nil {
+		createdByParam = &in.CreatedBy
+	}
+
 	var version models.PromptVersion
-	err = tx.QueryRow(ctx, `
-		INSERT INTO prompt_versions (prompt_id, version_number, assets, framework_id, technique_ids, composed_output)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, created_at
-	`, in.PromptID, versionNumber, in.Assets, in.FrameworkID, in.TechniqueIDs, in.ComposedOut).Scan(
-		&version.ID, &version.PromptID, &version.VersionNumber, &version.Assets, &version.FrameworkID,
-		&version.TechniqueIDs, &version.ComposedOut, &version.CreatedAt,
-	)
-	if err != nil {
+	if err := scanVersion(tx.QueryRow(ctx, `
+		INSERT INTO prompt_versions (
+			prompt_id, version_number, assets, framework_id, technique_ids, composed_output,
+			created_by, change_type, change_summary, parent_version_id
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING `+versionColumns,
+		in.PromptID, versionNumber, in.Assets, in.FrameworkID, in.TechniqueIDs, in.ComposedOut,
+		createdByParam, in.ChangeType, in.ChangeSummary, parentVersionID,
+	), &version); err != nil {
 		return nil, fmt.Errorf("insert version: %w", err)
 	}
 
-	// Compute and persist diff_from_parent for v2+. Failure is non-fatal: we log and continue so that a diff bug never blocks version creation.
-	if versionNumber > 1 {
+	// Compute and persist diff_from_parent against the resolved parent. Failure is
+	// non-fatal so a diff bug never blocks version creation.
+	if parentVersionID != nil {
 		var parent models.PromptVersion
-		var parentDiffBytes []byte
-		scanErr := tx.QueryRow(ctx, `
-			SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, diff_from_parent, created_at
+		scanErr := scanVersion(tx.QueryRow(ctx, `
+			SELECT `+versionColumns+`
 			FROM prompt_versions
-			WHERE prompt_id = $1 AND version_number = $2
-		`, in.PromptID, versionNumber-1).Scan(
-			&parent.ID, &parent.PromptID, &parent.VersionNumber, &parent.Assets, &parent.FrameworkID,
-			&parent.TechniqueIDs, &parent.ComposedOut, &parentDiffBytes, &parent.CreatedAt,
-		)
-		if parentDiffBytes != nil {
-			raw := json.RawMessage(parentDiffBytes)
-			parent.DiffFromParent = &raw
-		}
+			WHERE id = $1
+		`, *parentVersionID), &parent)
 		if scanErr != nil {
-			log.Printf("diff: fetch parent version %d for prompt %s: %v", versionNumber-1, in.PromptID, scanErr)
+			log.Printf("diff: fetch parent version %s for prompt %s: %v", *parentVersionID, in.PromptID, scanErr)
 		} else {
 			diffResult, diffErr := diff.Compute(&parent, &version)
 			if diffErr != nil {
@@ -204,7 +267,7 @@ func (r *PromptRepository) ListVersions(ctx context.Context, promptID, ownerID u
 	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, diff_from_parent, created_at
+		SELECT `+versionColumns+`
 		FROM prompt_versions
 		WHERE prompt_id = $1
 		ORDER BY version_number DESC
@@ -217,13 +280,8 @@ func (r *PromptRepository) ListVersions(ctx context.Context, promptID, ownerID u
 	versions := make([]models.PromptVersion, 0)
 	for rows.Next() {
 		var v models.PromptVersion
-		var diffBytes []byte
-		if err := rows.Scan(&v.ID, &v.PromptID, &v.VersionNumber, &v.Assets, &v.FrameworkID, &v.TechniqueIDs, &v.ComposedOut, &diffBytes, &v.CreatedAt); err != nil {
+		if err := scanVersion(rows, &v); err != nil {
 			return nil, fmt.Errorf("scan version row: %w", err)
-		}
-		if diffBytes != nil {
-			raw := json.RawMessage(diffBytes)
-			v.DiffFromParent = &raw
 		}
 		versions = append(versions, v)
 	}
@@ -233,21 +291,12 @@ func (r *PromptRepository) ListVersions(ctx context.Context, promptID, ownerID u
 // GetVersionByNumber fetches a single prompt version by its sequential number.
 func (r *PromptRepository) GetVersionByNumber(ctx context.Context, promptID uuid.UUID, versionNumber int) (*models.PromptVersion, error) {
 	var v models.PromptVersion
-	var diffBytes []byte
-	err := r.pool.QueryRow(ctx, `
-		SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, diff_from_parent, created_at
+	if err := scanVersion(r.pool.QueryRow(ctx, `
+		SELECT `+versionColumns+`
 		FROM prompt_versions
 		WHERE prompt_id = $1 AND version_number = $2
-	`, promptID, versionNumber).Scan(
-		&v.ID, &v.PromptID, &v.VersionNumber, &v.Assets, &v.FrameworkID,
-		&v.TechniqueIDs, &v.ComposedOut, &diffBytes, &v.CreatedAt,
-	)
-	if err != nil {
+	`, promptID, versionNumber), &v); err != nil {
 		return nil, err
-	}
-	if diffBytes != nil {
-		raw := json.RawMessage(diffBytes)
-		v.DiffFromParent = &raw
 	}
 	return &v, nil
 }
@@ -270,34 +319,23 @@ func (r *PromptRepository) DerivePrompt(ctx context.Context, in DerivePromptInpu
 	}
 
 	var sourceVersion models.PromptVersion
-	var sourceDiffBytes []byte
 	if in.SourceVersionID != nil {
-		err = tx.QueryRow(ctx, `
-			SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, diff_from_parent, created_at
+		err = scanVersion(tx.QueryRow(ctx, `
+			SELECT `+versionColumns+`
 			FROM prompt_versions
 			WHERE id = $1 AND prompt_id = $2
-		`, *in.SourceVersionID, in.SourcePromptID).Scan(
-			&sourceVersion.ID, &sourceVersion.PromptID, &sourceVersion.VersionNumber, &sourceVersion.Assets,
-			&sourceVersion.FrameworkID, &sourceVersion.TechniqueIDs, &sourceVersion.ComposedOut, &sourceDiffBytes, &sourceVersion.CreatedAt,
-		)
+		`, *in.SourceVersionID, in.SourcePromptID), &sourceVersion)
 	} else {
-		err = tx.QueryRow(ctx, `
-			SELECT id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, diff_from_parent, created_at
+		err = scanVersion(tx.QueryRow(ctx, `
+			SELECT `+versionColumns+`
 			FROM prompt_versions
 			WHERE prompt_id = $1
 			ORDER BY version_number DESC
 			LIMIT 1
-		`, in.SourcePromptID).Scan(
-			&sourceVersion.ID, &sourceVersion.PromptID, &sourceVersion.VersionNumber, &sourceVersion.Assets,
-			&sourceVersion.FrameworkID, &sourceVersion.TechniqueIDs, &sourceVersion.ComposedOut, &sourceDiffBytes, &sourceVersion.CreatedAt,
-		)
+		`, in.SourcePromptID), &sourceVersion)
 	}
 	if err != nil {
 		return nil, nil, err
-	}
-	if sourceDiffBytes != nil {
-		raw := json.RawMessage(sourceDiffBytes)
-		sourceVersion.DiffFromParent = &raw
 	}
 
 	var derivedPrompt models.Prompt
@@ -315,17 +353,20 @@ func (r *PromptRepository) DerivePrompt(ctx context.Context, in DerivePromptInpu
 		return nil, nil, fmt.Errorf("create derived prompt: %w", err)
 	}
 
+	// The derived v1 carries fork attribution: created_by from the new owner, change_type
+	// 'fork', and a cross-prompt parent_version_id pointing back at the source version.
+	// diff_from_parent is intentionally NULL for derived v1 rows (the content is a copy).
 	var derivedVersion models.PromptVersion
-	err = tx.QueryRow(ctx, `
-		INSERT INTO prompt_versions (prompt_id, version_number, assets, framework_id, technique_ids, composed_output)
-		VALUES ($1, 1, $2, $3, $4, $5)
-		RETURNING id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output, created_at
-	`, derivedPrompt.ID, sourceVersion.Assets, sourceVersion.FrameworkID, sourceVersion.TechniqueIDs, sourceVersion.ComposedOut).Scan(
-		&derivedVersion.ID, &derivedVersion.PromptID, &derivedVersion.VersionNumber, &derivedVersion.Assets,
-		&derivedVersion.FrameworkID, &derivedVersion.TechniqueIDs, &derivedVersion.ComposedOut, &derivedVersion.CreatedAt,
-	)
-	// diff_from_parent is intentionally NULL for derived v1 rows.
-	if err != nil {
+	if err := scanVersion(tx.QueryRow(ctx, `
+		INSERT INTO prompt_versions (
+			prompt_id, version_number, assets, framework_id, technique_ids, composed_output,
+			created_by, change_type, parent_version_id
+		)
+		VALUES ($1, 1, $2, $3, $4, $5, $6, 'fork', $7)
+		RETURNING `+versionColumns,
+		derivedPrompt.ID, sourceVersion.Assets, sourceVersion.FrameworkID, sourceVersion.TechniqueIDs, sourceVersion.ComposedOut,
+		in.OwnerID, sourceVersion.ID,
+	), &derivedVersion); err != nil {
 		return nil, nil, fmt.Errorf("create derived version: %w", err)
 	}
 
