@@ -25,10 +25,13 @@ type updatePromptRequest struct {
 }
 
 type createPromptVersionRequest struct {
-	Assets         json.RawMessage `json:"assets"`
-	FrameworkID    string          `json:"frameworkId"`
-	TechniqueIDs   []string        `json:"techniqueIds"`
-	ComposedOutput string          `json:"composedOutput"`
+	Assets          json.RawMessage `json:"assets"`
+	FrameworkID     string          `json:"frameworkId"`
+	TechniqueIDs    []string        `json:"techniqueIds"`
+	ComposedOutput  string          `json:"composedOutput"`
+	ChangeType      string          `json:"changeType,omitempty"`
+	ChangeSummary   string          `json:"changeSummary,omitempty"`
+	ParentVersionID string          `json:"parentVersionId,omitempty"`
 }
 
 type derivePromptRequest struct {
@@ -191,12 +194,38 @@ func createPromptVersionHandler(deps Dependencies) http.HandlerFunc {
 			req.Assets = json.RawMessage(`{}`)
 		}
 
+		// 'fork' attribution belongs to DerivePrompt; reject it here so we don't end up
+		// with fork-typed rows that lack a real cross-prompt source.
+		if req.ChangeType == "fork" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "use the derive endpoint to create a fork"})
+			return
+		}
+
+		var parentVersionID *uuid.UUID
+		if strings.TrimSpace(req.ParentVersionID) != "" {
+			parsed, err := uuid.Parse(req.ParentVersionID)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid parentVersionId"})
+				return
+			}
+			parentVersionID = &parsed
+		}
+
+		var changeSummary *string
+		if s := strings.TrimSpace(req.ChangeSummary); s != "" {
+			changeSummary = &s
+		}
+
 		version, err := deps.PromptRepo.CreateVersion(r.Context(), repository.CreateVersionInput{
-			PromptID:     promptID,
-			Assets:       req.Assets,
-			FrameworkID:  req.FrameworkID,
-			TechniqueIDs: req.TechniqueIDs,
-			ComposedOut:  req.ComposedOutput,
+			PromptID:        promptID,
+			Assets:          req.Assets,
+			FrameworkID:     req.FrameworkID,
+			TechniqueIDs:    req.TechniqueIDs,
+			ComposedOut:     req.ComposedOutput,
+			CreatedBy:       userID,
+			ChangeType:      req.ChangeType,
+			ChangeSummary:   changeSummary,
+			ParentVersionID: parentVersionID,
 		})
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create version"})
