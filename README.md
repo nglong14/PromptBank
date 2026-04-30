@@ -2,7 +2,9 @@
 
 ## Table of contents
 - [Overview](#overview)
+- [Prompt creation workflow](#prompt-creation-workflow)
 - [Feature](#feature)
+- [Version diff engine](#version-diff-engine)
 - [Structure](#structure)
 - [Technologies used](#technologies-used)
 - [Installation](#installation)
@@ -16,6 +18,11 @@ PromptBank is a prompt engineering workspace with:
 - Gemini-powered helpers for normalization, framework suggestion, scoring, and iterative refinement
 
 The project focuses on making prompt creation structured, repeatable, and versioned.
+
+## Prompt creation workflow
+PromptBank supports both creating a prompt from scratch and deriving a new prompt from an existing one. Users can enter raw prompt ideas, manually edit structured asset fields, ask the LLM to normalize fuzzy input into reusable assets, select frameworks and techniques, compose the final prompt, test it in the playground, and save the result as a new version.
+
+![PromptBank prompt creation workflow](docs/assets/prompt-creation-workflow.png)
 
 ## Feature
 - User authentication (register/login) with JWT
@@ -33,6 +40,11 @@ The project focuses on making prompt creation structured, repeatable, and versio
   - Technique-specific AI suggestions (few-shot examples, role persona, constraints)
 - Frontend pages for signup/login, prompt list, prompt detail/composition, version browsing
 
+## Version diff engine
+PromptBank includes a structured diff engine for prompt versions in `internal/diff/jsonpatch.go`. Instead of comparing composed prompt text, it compares the normalized version document: `assets`, `framework_id`, and `technique_ids`.
+
+The engine emits an RFC 6902-style subset of operations (`add`, `remove`, `replace`) with JSON Pointer paths and summary stats. Ordered arrays such as examples are compared by index, while set-like fields such as technique IDs are compared by membership. The API exposes this through `GET /api/v1/prompts/{promptID}/versions/diff?from=X&to=Y`, and version creation can cache the parent diff in `prompt_versions.diff_from_parent` so later lineage and history features do not need to recompute it.
+
 ## Structure
 ```text
 PromptBank/
@@ -44,12 +56,15 @@ PromptBank/
 │  ├─ llm/                 # Gemini client + normalize/score/refine/suggestion logic
 │  ├─ repository/          # Postgres repositories
 │  ├─ security/            # JWT and auth helpers
-│  ├─ compose/             # Prompt composing pipeline
+│  ├─ composition/         # Prompt composing pipeline
 │  ├─ framework/           # Framework definitions and slot mapping
 │  ├─ technique/           # Technique definitions and apply logic
 │  └─ asset/               # Asset models and normalization
+├─ db/
+│  └─ migrations/          # SQL migrations embedded into the API binary
+├─ docs/
+│  └─ assets/              # README and documentation assets
 ├─ frontend/               # Next.js app
-├─ migrations/             # SQL migrations
 ├─ docker-compose.yml      # Local infra: Postgres + Redis + API
 └─ README.md
 ```
