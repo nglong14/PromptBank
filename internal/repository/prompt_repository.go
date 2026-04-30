@@ -42,8 +42,6 @@ type CreateVersionInput struct {
 }
 
 // allowedChangeTypes mirrors the CHECK constraint on prompt_versions.change_type.
-// The repo enforces it as defense-in-depth alongside the DB; callers that pass an
-// unknown value get a clean Go error instead of a constraint violation.
 var allowedChangeTypes = map[string]struct{}{
 	"manual_edit": {},
 	"llm_refine":  {},
@@ -51,13 +49,11 @@ var allowedChangeTypes = map[string]struct{}{
 	"bulk_update": {},
 }
 
-// versionColumns lists the prompt_versions columns returned by every read path. Kept
-// as a single constant so SELECT, INSERT RETURNING, and Scan ordering can never drift.
+// versionColumns lists the prompt_versions columns returned by every read path
 const versionColumns = `id, prompt_id, version_number, assets, framework_id, technique_ids, composed_output,
 	diff_from_parent, created_by, change_type, change_summary, parent_version_id, created_at`
 
 // scanVersion reads a row produced by a SELECT/RETURNING that uses versionColumns into v.
-// row must be a pgx.Row (e.g. tx.QueryRow(...)) or a pgx.Rows positioned at a row.
 func scanVersion(row pgx.Row, v *models.PromptVersion) error {
 	var diffBytes []byte
 	if err := row.Scan(
