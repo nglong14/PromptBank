@@ -11,9 +11,7 @@ import (
 	"github.com/nglong14/PromptBank/db/migrations"
 )
 
-// initSchema is the bootstrap schema applied idempotently on every startup. It captures
-// the state of migration 001_init plus the diff_from_parent column (which predates the
-// versioned-migration runner). Versioned migrations under db/migrations/ run after it.
+// initSchema is the bootstrap schema applied idempotently on every startup
 const initSchema = `
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
@@ -78,10 +76,6 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 const initVersion = "001_init"
 
 // ApplyMigrations brings the database to the current schema version by:
-//  1. running the embedded bootstrap schema (idempotent),
-//  2. ensuring the schema_migrations ledger exists and treating 001_init as already applied,
-//  3. walking *.up.sql files from the embedded migrations FS in lexicographic order and
-//     applying any not yet recorded, each inside its own transaction.
 func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, initSchema); err != nil {
 		return fmt.Errorf("run init schema: %w", err)
